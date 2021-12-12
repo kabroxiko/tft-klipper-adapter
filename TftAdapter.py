@@ -10,18 +10,15 @@ POSITION_URL = ADDRESS+"printer/objects/query?gcode_move=gcode_position"
 SPEED_FACTOR_URL = ADDRESS+"printer/objects/query?gcode_move=speed_factor"
 EXTRUDE_FACTOR_URL = ADDRESS+"printer/objects/query?gcode_move=extrude_factor"
 
-
 gcode_url_template = ADDRESS+"printer/gcode/script?script={g:s}"
 temp_template = "ok T:{ETemp:.4f} /{ETarget:.4f} B:{BTemp:.4f} /{BTarget:.4f} P:0 /0.0000 @:0 B@:0\n"
 position_template = "X:{x:.2f} Y:{y:.2f} Z:{z:.2f} E:{e:.2f} \nok\n"
 feed_rate_template = "FR:{fr:}%\nok\n"
 flow_rate_template = "E0 Flow: {er:}%\nok\n"
 
-
 ser = serial.Serial('/dev/ttyAMA0', 57600)  # open serial port
 
 print(ser.name)
-
 
 lock = threading.Lock()
 
@@ -117,8 +114,6 @@ while True:
             write_to_serial("ok\n")
         else:
             write_to_serial(get_extrude_factor())
-
-
     else:
         print("default response to serial")
         write_to_serial(get_status())
