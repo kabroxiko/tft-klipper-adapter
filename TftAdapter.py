@@ -3,7 +3,7 @@ import atexit
 import requests  # instalation python -m pip install requests
 import threading
 
-ADDRESS = "http://192.168.100.151/"
+ADDRESS = "http://192.168.100.240/"
 
 TEMP_URL = ADDRESS+"printer/objects/query?extruder=target,temperature&heater_bed=target,temperature"
 POSITION_URL = ADDRESS+"printer/objects/query?gcode_move=gcode_position"
@@ -16,13 +16,13 @@ position_template = "X:{x:.2f} Y:{y:.2f} Z:{z:.2f} E:{e:.2f} \nok\n"
 feed_rate_template = "FR:{fr:}%\nok\n"
 flow_rate_template = "E0 Flow: {er:}%\nok\n"
 
-ser = serial.Serial('/dev/ttyAMA0', 57600)  # open serial port
+ser = serial.Serial('/dev/ttyUSB0', 57600)  # open serial port
 
 print(ser.name)
 
 lock = threading.Lock()
 
-acceptable_gcode = ["M104", "M140", "M106"]
+acceptable_gcode = ["M104", "M140", "M106", "M84"]
 
 # display is asking by M105 for reporting temps
 def auto_satus_repost():
@@ -33,7 +33,7 @@ def write_to_serial(data):
     if ser.is_open:
         lock.acquire()
         try:
-            ser.write(bytes(data))
+            ser.write(bytes(data, encoding='utf-8'))
         finally:
             lock.release()
     else:
@@ -81,7 +81,7 @@ def check_is_basic_gcode(gcode):
 
 while True:
 
-    gcode = ser.readline()
+    gcode = ser.readline().decode("utf-8")
     print("data from serial:\n")
     print(gcode)
     
@@ -101,7 +101,7 @@ while True:
         send_gcode_to_api(gcode)
         send_gcode_to_api("G90")
         write_to_serial("ok\n")
-        write_to_serial(get_current_position())
+        # write_to_serial(get_current_position())
     elif "M220" in gcode.capitalize():    
         if "M220 S" in gcode.upper():
             send_gcode_to_api(gcode)
