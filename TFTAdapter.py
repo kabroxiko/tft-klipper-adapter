@@ -7,8 +7,8 @@ from TFTSerial import TFTSerial
 logging.basicConfig(level=logging.INFO)
 
 # This should be moved to config
-ADDRESS = "http://192.168.100.240/"
-PORT = '/dev/ttyUSB0'
+ADDRESS = "http://127.0.0.1/"
+PORT = '/dev/ttyS2'
 
 client = MoonrakerApiClient(ADDRESS)
 tft_serial = TFTSerial(PORT)

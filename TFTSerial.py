@@ -4,9 +4,9 @@ import threading
 
 class TFTSerial:
 
-    def __init__(self, port, baudrate=57600):
+    def __init__(self, port, baudrate=115200):
         self.port = port
-        self.baudrate = baudrate 
+        self.baudrate = baudrate
         self.lock = threading.Lock()
         self.tft_serial= None
 
@@ -16,7 +16,7 @@ class TFTSerial:
         return False
 
     def open(self):
-        self.tft_serial = serial.Serial(self.port, self.baudrate) 
+        self.tft_serial = serial.Serial(self.port, self.baudrate)
         logging.info("Opening serial port: {} with baudrate: {}".format(self.port, self.baudrate))
 
     def read(self):
@@ -36,7 +36,7 @@ class TFTSerial:
                 self.lock.release()
         else:
             logging.warning("Serial port is not opened")
-    
+
     def send_ok(self):
         self.write("ok\n")
 
