@@ -1,8 +1,8 @@
 import atexit
 import threading
 import logging
-from MoonrakerApiClient import MoonrakerApiClient
-from TFTSerial import TFTSerial
+from moonrakerapiclient import moonrakerapiclient
+from tftserial import tftserial
 
 logging.basicConfig(level=logging.INFO)
 
@@ -10,8 +10,8 @@ logging.basicConfig(level=logging.INFO)
 ADDRESS = "http://127.0.0.1/"
 PORT = '/dev/ttyS2'
 
-client = MoonrakerApiClient(ADDRESS)
-tft_serial = TFTSerial(PORT)
+client = moonrakerapiclient(ADDRESS)
+tft_serial = tftserial(PORT)
 tft_serial.open()
 
 

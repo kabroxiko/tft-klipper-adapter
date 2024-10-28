@@ -2,7 +2,7 @@ import serial  # instalation python3 -m pip install pyserial
 import logging
 import threading
 
-class TFTSerial:
+class tftserial:
 
     def __init__(self, port, baudrate=115200):
         self.port = port

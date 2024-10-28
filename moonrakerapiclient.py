@@ -1,7 +1,7 @@
 import requests  # instalation python3 -m pip install requests
 import logging
 
-class MoonrakerApiClient:
+class moonrakerapiclient:
 
     def __init__(self,  address):
         self.TEMP_URL = address+"printer/objects/query?extruder=target,temperature&heater_bed=target,temperature"
@@ -48,7 +48,7 @@ class MoonrakerApiClient:
     def get_extrude_factor(self):
         logging.debug("get exrude factor called")
         return self.__make_get_request(self.EXTRUDE_FACTOR_URL)
-    
+
     def send_gcode_to_api(self, gcode):
         logging.debug("send gcode to API called")
         url = self.gcode_url_template.format(g=gcode);
@@ -58,4 +58,3 @@ class MoonrakerApiClient:
             return r.get("result")
         else:
             return r
-        
