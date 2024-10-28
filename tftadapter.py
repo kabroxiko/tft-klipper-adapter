@@ -1,14 +1,20 @@
 import serial
 import threading
 
-class TftBridge:
+class TFTSource:
     def __init__(self,config):
         self.printer = config.get_printer()
+        self.tftDevice = config.get('tft_device')
+        self.tftBaud = config.getint('tft_baud')
+        #
+
+class TFTBridge:
+    def __init__(self,config):
+        self.printer = config.get_printer()
+        TFTSource(config)
         #
         #get config
         #
-        self.tftDevice = config.get('tft_device')
-        self.tftBaud = config.getint('tft_baud')
         self.tftTimeout = config.getint('tft_timeout')
         self.klipperDevice = config.get('klipper_device')
         self.klipperBaud = config.getint('klipper_baud')
@@ -120,4 +126,4 @@ class TftBridge:
 #config loading function of add-on
 #
 def load_config(config):
-    return TftBridge(config)
+    return TFTBridge(config)
