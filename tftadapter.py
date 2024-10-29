@@ -1,7 +1,8 @@
 import serial
 import threading
 
-class TftBridge:
+
+class TFTBridge:
     def __init__(self,config):
         self.printer = config.get_printer()
         #
@@ -120,4 +121,4 @@ class TftBridge:
 #config loading function of add-on
 #
 def load_config(config):
-    return TftBridge(config)
+    return TFTBridge(config)
