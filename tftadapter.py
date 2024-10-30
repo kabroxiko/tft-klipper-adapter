@@ -2,6 +2,7 @@ import serial
 import atexit
 import requests
 import threading
+import logging
 
 class TFTAdapter:
     def __init__(self, config):
@@ -20,7 +21,7 @@ class TFTAdapter:
 
         self.tftSerial = serial.Serial('/dev/ttyS2', 115200)  # open serial port
 
-        print(self.tftSerial.name)
+        logging.info(self.tftSerial.name)
 
         self.lock = threading.Lock()
 
@@ -43,12 +44,12 @@ class TFTAdapter:
             finally:
                 self.lock.release()
         else:
-            print("serial port is not open")
+            logging.info("serial port is not open")
 
     def get_status(self):
         r = requests.get(self.TEMP_URL)
-        print(r.status_code)
-        print(r.json())
+        logging.info(r.status_code)
+        logging.info(r.json())
         results = r.json().get("result")
         status = results.get("status")
         statusExtruder = status.get("extruder")
@@ -57,27 +58,27 @@ class TFTAdapter:
 
     def get_current_position(self):
         r = requests.get(self.POSITION_URL)
-        print(r.json())
+        logging.info(r.json())
         position = r.json().get("result").get("status").get("gcode_move").get("gcode_position")
-        print(position)
+        logging.info(position)
         return self.position_template.format(x=position[0],y=position[1],z=position[2],e=position[3])
 
     def get_speed_factor(self):
         r = requests.get(self.SPEED_FACTOR_URL)
-        print(r.json())
+        logging.info(r.json())
         speed_factor = r.json().get("result").get("status").get("gcode_move").get("speed_factor")
         return self.feed_rate_template.format(fr=speed_factor*100)
 
     def get_extrude_factor(self):
         r = requests.get(self.EXTRUDE_FACTOR_URL)
-        print(r.json())
+        logging.info(r.json())
         extrude_factor = r.json().get("result").get("status").get("gcode_move").get("extrude_factor")
         return self.flow_rate_template.format(er=extrude_factor*100)
 
     #self.auto_satus_repost()
     def send_gcode_to_api(self, gcode):
         r = requests.post(self.gcode_url_template.format(g=gcode))
-        print(r)
+        logging.info(r)
         return r.json().get("result")
 
     def check_is_basic_gcode(self, gcode):
@@ -90,13 +91,13 @@ class TFTAdapter:
     def exit_handler(self):
         if self.tftSerial.is_open:
             self.tftSerial.close()
-        print("Serial closed")
+        logging.info("Serial closed")
 
     def start(self):
         while True:
             gcode = self.tftSerial.readline().decode("utf-8")
-            print("data from serial:\n")
-            print(gcode)
+            logging.info("data from serial:\n")
+            logging.info(gcode)
 
             if self.check_is_basic_gcode(gcode):
                 self.send_gcode_to_api(gcode)
@@ -128,7 +129,7 @@ class TFTAdapter:
                 else:
                     self.write_to_serial(self.get_extrude_factor())
             else:
-                print("default response to serial")
+                logging.info("default response to serial")
                 self.write_to_serial(self.get_status())
 
 #
