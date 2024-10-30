@@ -26,6 +26,8 @@ class TFTAdapter:
 
         self.acceptable_gcode = ["M104", "M140", "M106", "M84"]
 
+        atexit.register(self.exit_handler)
+
         self.start()
 
     # display is asking by M105 for reporting temps
@@ -47,7 +49,8 @@ class TFTAdapter:
         r = requests.get(self.TEMP_URL)
         print(r.status_code)
         print(r.json())
-        status = r.json().get("result").get("status")
+        results = r.json().get("result")
+        status = results.get("status")
         statusExtruder = status.get("extruder")
         statusBed = status.get("heater_bed")
         return self.temp_template.format(ETemp = statusExtruder.get("temperature"), ETarget= statusExtruder.get("target"), BTemp=statusBed.get("temperature"), BTarget = statusBed.get("target"))
@@ -127,8 +130,6 @@ class TFTAdapter:
             else:
                 print("default response to serial")
                 self.write_to_serial(self.get_status())
-
-        atexit.register(self.exit_handler)
 
 #
 #config loading function of add-on
