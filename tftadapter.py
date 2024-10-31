@@ -3,23 +3,37 @@ import atexit
 import requests
 import threading
 import logging
+# from websocket import create_connection
+
 
 class TFTAdapter:
     def __init__(self, config):
-        ADDRESS = "http://127.0.0.1/"
+        self.printer = config.get_printer()
+        tft_device = config.get('tft_device')
+        tft_baud = config.getint('tft_baud')
+        moonraker_url = config.get('moonraker_url')
 
-        self.TEMP_URL = ADDRESS+"printer/objects/query?extruder=target,temperature&heater_bed=target,temperature"
-        self.POSITION_URL = ADDRESS+"printer/objects/query?gcode_move=gcode_position"
-        self.SPEED_FACTOR_URL = ADDRESS+"printer/objects/query?gcode_move=speed_factor"
-        self.EXTRUDE_FACTOR_URL = ADDRESS+"printer/objects/query?gcode_move=extrude_factor"
+        query = "query?extruder=target,temperature"
 
-        self.gcode_url_template = ADDRESS+"printer/gcode/script?script={g:s}"
+        self.headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3"
+        }
+        query_url = "%sprinter/objects/query" % (moonraker_url)
+        self.temp_url = "%s?extruder=target,temperature&heater_bed=target,temperature" % (query_url)
+        self.POSITION_URL = moonraker_url+"printer/objects/query?gcode_move=gcode_position"
+        self.SPEED_FACTOR_URL = moonraker_url+"printer/objects/query?gcode_move=speed_factor"
+        self.EXTRUDE_FACTOR_URL = moonraker_url+"printer/objects/query?gcode_move=extrude_factor"
+        self.TEMP_URL = moonraker_url+"printer/objects/query"
+        self.gcode_url_template = moonraker_url+"printer/gcode/script?script={g:s}"
+        # self.temp_url = "%s/printer/objects/%s" % (moonraker_url, temp_query)
+
         self.temp_template = "ok T:{ETemp:.4f} /{ETarget:.4f} B:{BTemp:.4f} /{BTarget:.4f} P:0 /0.0000 @:0 B@:0\n"
         self.position_template = "X:{x:.2f} Y:{y:.2f} Z:{z:.2f} E:{e:.2f} \nok\n"
         self.feed_rate_template = "FR:{fr:}%\nok\n"
         self.flow_rate_template = "E0 Flow: {er:}%\nok\n"
 
-        self.tftSerial = serial.Serial('/dev/ttyS2', 115200)  # open serial port
+        self.tftSerial = serial.Serial(tft_device, tft_baud)  # open serial port
+        # self.ws = create_connection("wss://ws.dogechain.info/inv")
 
         logging.info(self.tftSerial.name)
 
@@ -47,13 +61,19 @@ class TFTAdapter:
             logging.info("serial port is not open")
 
     def get_status(self):
-        r = requests.get(self.TEMP_URL)
+        logging.info(self.temp_url)
+        r = requests.get(self.temp_url)
+        logging.info(r)
         logging.info(r.status_code)
         logging.info(r.json())
         results = r.json().get("result")
+        logging.info(results)
         status = results.get("status")
+        logging.info(status)
         statusExtruder = status.get("extruder")
+        logging.info(statusExtruder)
         statusBed = status.get("heater_bed")
+        logging.info(statusBed)
         return self.temp_template.format(ETemp = statusExtruder.get("temperature"), ETarget= statusExtruder.get("target"), BTemp=statusBed.get("temperature"), BTarget = statusBed.get("target"))
 
     def get_current_position(self):
@@ -94,7 +114,8 @@ class TFTAdapter:
         logging.info("Serial closed")
 
     def start(self):
-        while True:
+        a = 0
+        while a <= 10:
             gcode = self.tftSerial.readline().decode("utf-8")
             logging.info("data from serial:\n")
             logging.info(gcode)
@@ -131,6 +152,7 @@ class TFTAdapter:
             else:
                 logging.info("default response to serial")
                 self.write_to_serial(self.get_status())
+            a += 1
 
 #
 #config loading function of add-on
