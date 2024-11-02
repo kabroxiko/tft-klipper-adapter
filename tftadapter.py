@@ -98,6 +98,7 @@ class TFTAdapter:
 
         atexit.register(self.exit_handler)
 
+        self.auto_status_repost()
         self.start()
 
     def sock_error_exit(self, msg):
@@ -164,9 +165,11 @@ class TFTAdapter:
         self.sock_error_exit("request timed out")
 
     # display is asking by M105 for reporting temps
-    # def auto_satus_repost(self):
-    #     threading.Timer(5.0, auto_satus_repost).start()
-    #     self.write_to_serial(self.get_status())
+    def auto_status_repost(self):
+        logging.info("start auto_status_repost")
+        threading.Timer(5.0, self.auto_status_repost).start()
+        self.write_to_serial(self.get_status())
+        logging.info("end auto_status_repost")
 
     def write_to_serial(self, data):
         if self.tftSerial.is_open:
@@ -182,16 +185,14 @@ class TFTAdapter:
         logging.debug("temp_request: %s" % self.temp_request)
         response = self.request_from_unixsocket(self.temp_request)
         logging.debug("response: %s" % response)
-        statusExtruder = response['status']['extruder'] # get job totals from JSON response
-        logging.debug(statusExtruder)
-        statusBed      = response['status']['heater_bed'] # get job totals from JSON response
-        logging.debug(statusBed)
-        return self.temp_template.format(
-            ETemp   = statusExtruder['temperature'],
-            ETarget = statusExtruder['target'],
-            BTemp   = statusBed['temperature'],
-            BTarget = statusBed['target']
+        message = self.temp_template.format(
+            ETemp   = response['status']['extruder']['temperature'],
+            ETarget = response['status']['extruder']['target'],
+            BTemp   = response['status']['heater_bed']['temperature'],
+            BTarget = response['status']['heater_bed']['target']
         )
+        logging.debug(message)
+        return message
 
     def get_current_position(self):
         response = self.request_from_unixsocket(self.position_request)
@@ -211,7 +212,6 @@ class TFTAdapter:
         extrude_factor = response['status']['gcode_move']['extrude_factor']
         return self.flow_rate_template.format(er=extrude_factor*100)
 
-    #self.auto_satus_repost()
     def send_gcode_to_api(self, gcode):
         gcode_request = json.dumps({"jsonrpc": "2.0", "method": "printer.gcode.script", "params": {"script": gcode}, "id": 1})
         response = self.request_from_unixsocket(gcode_request)
@@ -223,7 +223,6 @@ class TFTAdapter:
             if g in gcode.capitalize():
                 return True
         return False
-
 
     def exit_handler(self):
         if self.tftSerial.is_open:
@@ -265,8 +264,8 @@ class TFTAdapter:
                 else:
                     self.write_to_serial(self.get_extrude_factor())
             else:
-                logging.info("default response to serial")
-                self.write_to_serial(self.get_status())
+                logging.info("unknown command")
+                # self.write_to_serial(self.get_status())
 
 #
 #config loading function of add-on
