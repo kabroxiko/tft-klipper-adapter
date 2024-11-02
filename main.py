@@ -22,7 +22,7 @@ class PrinterConfig:
         if key == 'tft_device':
             return '/dev/ttyS2'
         elif key == 'moonraker_url':
-            return 'http://127.0.0.1:7125'
+            return 'ws://127.0.0.1:7125'
         else:
             exit(1)
     def getint(self, key):

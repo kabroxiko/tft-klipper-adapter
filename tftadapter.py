@@ -6,11 +6,12 @@ import time
 import threading
 import logging
 import socket
+import websocket
 import errno
 
 class TFTAdapter:
     def __init__(self, config):
-        logging.getLogger().setLevel(logging.INFO)
+        logging.getLogger().setLevel(logging.DEBUG)
         self.config = config
         self.printer = config.get_printer()
         self.reactor = self.printer.get_reactor()
@@ -21,69 +22,13 @@ class TFTAdapter:
         moonraker_url = config.get('moonraker_url')
         self.moonraker_socket_path = "/home/pi/printer_data/comms/moonraker.sock"
 
-        self.temp_request = json.dumps(
-            {
-                "jsonrpc": "2.0",
-                "method": "printer.objects.query",
-                "params": {
-                    "objects": {
-                        "extruder": ["target", "temperature"],
-                        "heater_bed": ["target", "temperature"]
-                    }
-                },
-                "id": 1
-            }
-        )
-        self.position_request = json.dumps(
-            {
-                "jsonrpc": "2.0",
-                "method": "printer.objects.query",
-                "params": {
-                    "objects": {
-                        "gcode_move": ["gcode_move"]
-                    }
-                },
-                "id": 1
-            }
-        )
-        self.speed_factor_request = json.dumps(
-            {
-                "jsonrpc": "2.0",
-                "method": "printer.objects.query",
-                "params": {
-                    "objects": {
-                        "gcode_move": ["speed_factor"]
-                    }
-                },
-                "id": 1
-            }
-        )
-        self.extrude_factor_request = json.dumps(
-            {
-                "jsonrpc": "2.0",
-                "method": "printer.objects.query",
-                "params": {
-                    "objects": {
-                        "gcode_move": ["extrude_factor"]
-                    }
-                },
-                "id": 1
-            }
-        )
-        self.position_request = json.dumps(
-            {
-                "jsonrpc": "2.0",
-                "method": "printer.objects.query",
-                "params": {
-                    "objects": {
-                        "gcode_move": ["gcode_position"]
-                    }
-                },
-                "id": 1
-            }
-        )
-
         # self.gcode_url_template = moonraker_url+"/printer/gcode/script?script={g:s}"
+
+        self.heater_bed = {"temperature": 0, "target": 0}
+        self.extruder = {"temperature": 0, "target": 0}
+        self.gcode_position = [0, 0, 0, 0]
+        self.extrude_factor = 0
+        self.speed_factor = 0
 
         self.temp_template = "ok T:{ETemp:.2f} /{ETarget:.2f} B:{BTemp:.2f} /{BTarget:.2f} @:0 B@:0\n"
         self.position_template = "X:{x:.2f} Y:{y:.2f} Z:{z:.2f} E:{e:.2f} \nok\n"
@@ -97,10 +42,112 @@ class TFTAdapter:
         self.acceptable_gcode = ["M104", "M140", "M106", "M84"]
 
         atexit.register(self.exit_handler)
+        printer_ip = "localhost"
+        api_port = 7125
 
-        # self.get_settings()
-        self.auto_status_repost()
-        self.start()
+        self.ws_url = "ws://%s:%s/websocket?token=" % ( printer_ip, str(api_port))
+
+        self.ws = websocket.WebSocketApp(url=self.ws_url,
+                                         on_close=self.on_close,
+                                         on_error=self.on_error,
+                                         on_message=self.on_message,
+                                         on_open=self.on_open)
+        #
+        #create and start threads
+        #
+        t1 = threading.Thread(target=self.ws.run_forever)
+        t2 = threading.Thread(target=self.start)
+        t1.start()
+        t2.start()
+
+    def on_close(self, ws, close_status, close_msg):
+        logging.debug("on_close()...")
+        pass
+
+    def on_error(self, ws, error):
+        logging.error("Websocket error: %s" % error)
+
+    def on_message(self, ws, msg):
+
+        response = json.loads(msg)
+        status = None
+        # logging.debug(response)
+        if 'id' in response and response["id"] == 1234:
+            status = response["result"]["status"]
+            self.add_subscription()
+            # logging.debug(status)
+        if "method" in response and response['method'] == "notify_status_update":
+            status = response["params"][0]
+            # logging.debug(status)
+        if status is not None:
+            if 'heater_bed' in status:
+                self.heater_bed["temperature"] = status['heater_bed']["temperature"]
+                if "target" in status['heater_bed']:
+                    self.heater_bed["target"] = status['heater_bed']["target"]
+            if 'extruder' in status:
+                self.extruder["temperature"] = status['extruder']["temperature"]
+                if "target" in status['extruder']:
+                    self.extruder["target"] = status['extruder']["target"]
+            if 'gcode_move' in status:
+                gcode_move = status['gcode_move']
+                if "gcode_position" in status['gcode_move']:
+                    self.gcode_position = gcode_move['gcode_position']
+                if "speed_factor" in status['gcode_move']:
+                    self.speed_factor = gcode_move['speed_factor']
+                if "extrude_factor" in status['gcode_move']:
+                    self.extrude_factor = gcode_move['extrude_factor']
+
+            logging.debug("heater_bed: %s" % self.heater_bed)
+            logging.debug("extruder: %s" % self.extruder)
+            logging.debug("gcode_position: %s" % self.gcode_position)
+            logging.debug("speed_factor: %s" % self.speed_factor)
+            logging.debug("extrude_factor: %s" % self.extrude_factor)
+
+    def on_open(self, ws):
+
+        self.query_data(ws)
+
+
+    def unsubscribe_all(self):
+        data = {
+            "jsonrpc": "2.0",
+            "method": "printer.objects.subscribe",
+            "params": {
+                "objects": { },
+            },
+            "id": 4654
+        }
+        self.ws.send(json.dumps(data))
+
+    def add_subscription(self):
+        data = {
+            "jsonrpc": "2.0",
+            "method": "printer.objects.subscribe",
+            "params": {
+                "objects": {
+                    "extruder": [ "temperature", "target"],
+                    "heater_bed": ["temperature", "target"],
+                    "gcode_move": ["gcode_position", "speed_factor", "extrude_factor"]
+                }
+            },
+            "id": 5434
+        }
+        self.ws.send(json.dumps(data))
+
+    def query_data(self, ws):
+        query_req = {
+            "jsonrpc": "2.0",
+            "method": "printer.objects.query",
+            "params": {
+                "objects": {
+                    "extruder": [ "temperature", "target"],
+                    "heater_bed": ["temperature", "target"],
+                    "gcode_move": ["gcode_position", "speed_factor", "extrude_factor"]
+                }
+            },
+            "id": 1234
+        }
+        ws.send(json.dumps(query_req))
 
     def sock_error_exit(self, msg):
         sys.stderr.write(msg + "\n")
@@ -111,7 +158,7 @@ class TFTAdapter:
             resp = json.loads(msg)
         except json.JSONDecodeError:
             return None
-        if resp.get("id", -1) != 1:
+        if resp.get("id", -1) != 4758:
             return None
         if "error" in resp:
             err = resp["error"].get("message", "Unknown")
@@ -164,13 +211,6 @@ class TFTAdapter:
             whsock.close()
         self.sock_error_exit("request timed out")
 
-    # display is asking by M105 for reporting temps
-    def auto_status_repost(self):
-        logging.info("start auto_status_repost")
-        threading.Timer(5.0, self.auto_status_repost).start()
-        self.write_to_serial(self.get_status())
-        logging.info("end auto_status_repost")
-
     def write_to_serial(self, data):
         if self.tftSerial.is_open:
             self.lock.acquire()
@@ -179,17 +219,14 @@ class TFTAdapter:
             finally:
                 self.lock.release()
         else:
-            logging.info("serial port is not open")
+            logging.debug("serial port is not open")
 
     def get_status(self):
-        logging.debug("temp_request: %s" % self.temp_request)
-        response = self.request_from_unixsocket(self.temp_request)
-        logging.debug("response: %s" % response)
         message = self.temp_template.format(
-            ETemp   = response['status']['extruder']['temperature'],
-            ETarget = response['status']['extruder']['target'],
-            BTemp   = response['status']['heater_bed']['temperature'],
-            BTarget = response['status']['heater_bed']['target']
+            ETemp   = self.extruder['temperature'],
+            ETarget = self.extruder['target'],
+            BTemp   = self.heater_bed['temperature'],
+            BTarget = self.heater_bed['target']
         )
         logging.debug(message)
         return message
@@ -217,26 +254,35 @@ class TFTAdapter:
         return message
 
     def get_current_position(self):
-        response = self.request_from_unixsocket(self.position_request)
-        logging.debug("response: %s" % response)
-        position = response['status']['gcode_move']['gcode_position']
-        return self.position_template.format(x=position[0],y=position[1],z=position[2],e=position[3])
+        message = self.position_template.format(
+            x=self.gcode_position[0],
+            y=self.gcode_position[1],
+            z=self.gcode_position[2],
+            e=self.gcode_position[3]
+        )
+        logging.debug(message)
+        return message
 
     def get_speed_factor(self):
-        response = self.request_from_unixsocket(self.speed_factor_request)
-        logging.debug("response: %s" % response)
-        speed_factor = response['status']['gcode_move']['speed_factor']
-        return self.feed_rate_template.format(fr=speed_factor*100)
+        message = self.feed_rate_template.format(fr=self.speed_factor*100)
+        logging.debug(message)
+        return message
 
     def get_extrude_factor(self):
-        response = self.request_from_unixsocket(self.extrude_factor_request)
-        logging.debug("response: %s" % response)
-        extrude_factor = response['status']['gcode_move']['extrude_factor']
-        return self.flow_rate_template.format(er=extrude_factor*100)
+        message = self.flow_rate_template.format(er=self.extrude_factor*100)
+        logging.debug(message)
+        return message
 
     def send_gcode_to_api(self, gcode):
-        gcode_request = json.dumps({"jsonrpc": "2.0", "method": "printer.gcode.script", "params": {"script": gcode}, "id": 1})
-        response = self.request_from_unixsocket(gcode_request)
+        gcode_request = {
+            "jsonrpc": "2.0",
+            "method": "printer.gcode.script",
+            "params": {
+                "script": gcode
+            },
+            "id": 4758
+        }
+        response = self.request_from_unixsocket(json.dumps(gcode_request))
         logging.debug("response: %s" % response)
         return response
 
@@ -249,12 +295,12 @@ class TFTAdapter:
     def exit_handler(self):
         if self.tftSerial.is_open:
             self.tftSerial.close()
-        logging.info("Serial closed")
+        logging.debug("Serial closed")
 
     def start(self):
         while True:
             gcode = self.tftSerial.readline().decode("utf-8")
-            logging.info("data from serial: %s" % gcode)
+            logging.debug("data from serial: %s" % gcode)
             if self.check_is_basic_gcode(gcode):
                 self.send_gcode_to_api(gcode)
                 self.write_to_serial("ok\n")
@@ -287,7 +333,7 @@ class TFTAdapter:
                 else:
                     self.write_to_serial(self.get_extrude_factor())
             else:
-                logging.info("unknown command")
+                logging.debug("unknown command")
                 # self.write_to_serial(self.get_status())
 
 #
