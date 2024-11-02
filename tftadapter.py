@@ -256,6 +256,8 @@ class TFTAdapter:
         while True:
             gcode = self.tftSerial.readline().decode("utf-8")
             logging.info("data from serial: %s" % gcode)
+            message = await websocket.recv()
+            print("message: " + message)
 
             if self.check_is_basic_gcode(gcode):
                 self.send_gcode_to_api(gcode)
