@@ -11,7 +11,7 @@ import serial
 
 class TFTAdapter:
     def __init__(self, config):
-        logging.getLogger().setLevel(logging.DEBUG)
+        logging.getLogger().setLevel(logging.INFO)
         self.config = config
         self.printer = config.get_printer()
         self.reactor = self.printer.get_reactor()
@@ -54,9 +54,9 @@ class TFTAdapter:
         threading.Thread(target=self.start_serial).start()
 
     def _on_close(self, ws, close_status, close_msg):
-        logging.debug("Reconnect: %s" % time.ctime())
+        logging.info("Reconnecting websocket")
         time.sleep(10)
-        self.start_socket() # retry per 10 seconds
+        self.start_socket()
 
     def _on_error(self, ws, error):
         logging.error("Websocket error: %s" % error)

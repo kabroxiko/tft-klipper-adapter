@@ -2,7 +2,7 @@
 import tftadapter
 import logging
 
-logging.basicConfig(format='%(message)s',level=logging.DEBUG)
+logging.basicConfig(format='%(message)s',level=logging.INFO)
 
 class Printer:
     def __init__(self):
