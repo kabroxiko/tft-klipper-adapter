@@ -98,6 +98,7 @@ class TFTAdapter:
 
         atexit.register(self.exit_handler)
 
+        # self.get_settings()
         self.auto_status_repost()
         self.start()
 
@@ -194,6 +195,28 @@ class TFTAdapter:
         logging.debug(message)
         return message
 
+    def get_settings(self):
+        message = "FIRMWARE_NAME:Klipper {printer.mcu.mcu_version} SOURCE_CODE_URL:https://github.com/Klipper3d/klipper PROTOCOL_VERSION:1.0 MACHINE_TYPE:Artillery Genius Pro\n"
+        message = "%sCap:EEPROM:1\n" % (message)
+        message = "%sCap:AUTOREPORT_TEMP:1\n" % (message)
+        message = "%sCap:AUTOREPORT_POS:1\n" % (message)
+        message = "%sCap:AUTOLEVEL:1\n" % (message)
+        message = "%sCap:Z_PROBE:1\n" % (message)
+        message = "%sCap:LEVELING_DATA:0\n" % (message)
+        message = "%sCap:SOFTWARE_POWER:0\n" % (message)
+        message = "%sCap:TOGGLE_LIGHTS:0\n" % (message)
+        message = "%sCap:CASE_LIGHT_BRIGHTNESS:0\n" % (message)
+        message = "%sCap:EMERGENCY_PARSER:1\n" % (message)
+        message = "%sCap:PROMPT_SUPPORT:0\n" % (message)
+        message = "%sCap:SDCARD:1\n" % (message)
+        message = "%sCap:MULTI_VOLUME:0\n" % (message)
+        message = "%sCap:AUTOREPORT_SD_STATUS:1\n" % (message)
+        message = "%sCap:LONG_FILENAME:1\n" % (message)
+        message = "%sCap:BABYSTEPPING:1\n" % (message)
+        message = "%sCap:BUILD_PERCENT:1\n" % (message)  # M73 support
+        message = "%sCap:CHAMBER_TEMPERATURE:0\n" % (message)
+        return message
+
     def get_current_position(self):
         response = self.request_from_unixsocket(self.position_request)
         logging.debug("response: %s" % response)
@@ -239,6 +262,8 @@ class TFTAdapter:
                 self.write_to_serial("ok\n")
             elif "M105" in gcode.capitalize():
                 self.write_to_serial(self.get_status())
+            elif "M115" in gcode.capitalize():
+                self.write_to_serial(self.get_settings())
             elif "M114" in gcode.capitalize():
                 self.write_to_serial(self.get_current_position())
             elif "G28" in gcode.capitalize():
