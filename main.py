@@ -3,6 +3,9 @@ import tftadapter
 import logging
 
 logging.basicConfig(format='%(message)s',level=logging.INFO)
+tft_device = '/dev/ttyS2'
+moonraker_url = 'ws://127.0.0.1:7125'
+tft_baud = 115200
 
 class Printer:
     def __init__(self):
@@ -20,18 +23,18 @@ class PrinterConfig:
         return self.printer
     def get(self, key):
         if key == 'tft_device':
-            return '/dev/ttyS2'
+            return tft_device
         elif key == 'moonraker_url':
-            return 'ws://127.0.0.1:7125'
+            return moonraker_url
         else:
             exit(1)
     def getint(self, key):
         if key == 'tft_baud':
-            return 115200
+            return tft_baud
 
-    # def run(self):
-config = PrinterConfig()
-tftadapter.load_config(config)
+def run():
+    config = PrinterConfig()
+    tftadapter.load_config(config)
 
-# if __name__ == '__main__':
-#     Run().run()
+if __name__ == '__main__':
+    run()

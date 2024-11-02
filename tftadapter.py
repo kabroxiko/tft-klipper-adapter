@@ -11,7 +11,6 @@ import serial
 
 class TFTAdapter:
     def __init__(self, config):
-        logging.getLogger().setLevel(logging.INFO)
         self.config = config
         self.printer = config.get_printer()
         self.reactor = self.printer.get_reactor()
@@ -42,10 +41,8 @@ class TFTAdapter:
         self.acceptable_gcode = ["M104", "M140", "M106", "M84"]
 
         atexit.register(self.exit_handler)
-        printer_ip = "localhost"
-        api_port = 7125
 
-        self.ws_url = "ws://%s:%s/websocket?token=" % ( printer_ip, str(api_port))
+        self.ws_url = "%s/websocket?token=" % (moonraker_url)
 
         #
         #create and start threads
@@ -99,7 +96,7 @@ class TFTAdapter:
 
     def _on_open(self, ws):
         self.query_data(ws)
-
+        self.write_to_serial(self.get_settings())
 
     def unsubscribe_all(self):
         data = {
@@ -212,9 +209,9 @@ class TFTAdapter:
             finally:
                 self.lock.release()
         else:
-            logging.debug("serial port is not open")
+            logging.error("serial port is not open")
 
-    def get_status(self):
+    def get_temperature(self):
         message = self.temp_template.format(
             ETemp   = self.extruder['temperature'],
             ETarget = self.extruder['target'],
@@ -230,8 +227,8 @@ class TFTAdapter:
         message = "%s PROTOCOL_VERSION:1.0" % (message)
         message = "%s MACHINE_TYPE:Artillery Genius Pro\n" % (message)
         message = "%sCap:EEPROM:1\n" % (message)
-        message = "%sCap:AUTOREPORT_TEMP:1\n" % (message)
-        message = "%sCap:AUTOREPORT_POS:1\n" % (message)
+        message = "%sCap:AUTOREPORT_TEMP:0\n" % (message)
+        message = "%sCap:AUTOREPORT_POS:0\n" % (message)
         message = "%sCap:AUTOLEVEL:1\n" % (message)
         message = "%sCap:Z_PROBE:1\n" % (message)
         message = "%sCap:LEVELING_DATA:0\n" % (message)
@@ -304,12 +301,16 @@ class TFTAdapter:
     def start_serial(self):
         while True:
             gcode = self.tft_serial.readline().decode("utf-8")
-            logging.debug("data from serial: %s" % gcode)
+            logging.info("data from serial: %s" % gcode)
             if self.check_is_basic_gcode(gcode):
                 self.send_gcode_to_api(gcode)
                 self.write_to_serial("ok\n")
             elif "M105" in gcode.capitalize():
-                self.write_to_serial(self.get_status())
+                self.write_to_serial(self.get_temperature())
+            elif "M155" in gcode.capitalize():
+                # TODO: deshabilitar en firmware
+                logging.debug("enable temperature autoreport")
+                self.write_to_serial("ok\n")
             elif "M115" in gcode.capitalize():
                 self.write_to_serial(self.get_settings())
             elif "M114" in gcode.capitalize():
@@ -337,8 +338,7 @@ class TFTAdapter:
                 else:
                     self.write_to_serial(self.get_extrude_factor())
             else:
-                logging.debug("unknown command")
-                # self.write_to_serial(self.get_status())
+                logging.warn("unknown command")
 
 #
 #config loading function of add-on
