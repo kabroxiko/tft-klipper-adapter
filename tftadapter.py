@@ -140,7 +140,6 @@ class TFTAdapter:
     def request_from_unixsocket(self, request):
         whsock = self.webhook_socket_create()
         whsock.settimeout(1.)
-        # send mesh query
         whsock.send(request.encode() + b"\x03")
         sock_data = b""
         end_time = time.monotonic() + 30.0
@@ -152,7 +151,7 @@ class TFTAdapter:
                     pass
                 else:
                     if not data:
-                        self.sock_error_exit("Socket closed before mesh received")
+                        self.sock_error_exit("Socket closed before response received")
                     parts = data.split(b"\x03")
                     parts[0] = sock_data + parts[0]
                     sock_data = parts.pop()
