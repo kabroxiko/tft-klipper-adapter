@@ -143,12 +143,12 @@ class TFTAdapter:
         sys.stderr.write(msg + "\n")
         sys.exit(-1)
 
-    def process_message(self, msg):
+    def process_message(self, msg, id):
         try:
             resp = json.loads(msg)
         except json.JSONDecodeError:
             return None
-        if resp.get("id", -1) != 4758:
+        if resp.get("id", -1) != id:
             return None
         if "error" in resp:
             err = resp["error"].get("message", "Unknown")
@@ -174,7 +174,7 @@ class TFTAdapter:
         logging.debug("Connected")
         return sock
 
-    def request_from_unixsocket(self, request):
+    def request_from_unixsocket(self, request, id):
         whsock = self.webhook_socket_create()
         whsock.settimeout(1.)
         whsock.send(request.encode() + b"\x03")
@@ -193,7 +193,7 @@ class TFTAdapter:
                     parts[0] = sock_data + parts[0]
                     sock_data = parts.pop()
                     for msg in parts:
-                        result = self.process_message(msg)
+                        result = self.process_message(msg, id)
                         if result is not None:
                             return result
                 time.sleep(.1)
@@ -222,7 +222,14 @@ class TFTAdapter:
         return message
 
     def get_settings(self):
-        message = "FIRMWARE_NAME:Klipper {printer.mcu.mcu_version}"
+        id = 5153
+        info = {
+            "jsonrpc": "2.0",
+            "method": "printer.info",
+            "id": id
+        }
+        response = self.request_from_unixsocket(json.dumps(info), id)
+        message = "FIRMWARE_NAME:Klipper %s" % (response["software_version"])
         message = "%s SOURCE_CODE_URL:https://github.com/Klipper3d/klipper" % (message)
         message = "%s PROTOCOL_VERSION:1.0" % (message)
         message = "%s MACHINE_TYPE:Artillery Genius Pro\n" % (message)
@@ -267,15 +274,16 @@ class TFTAdapter:
         return message
 
     def send_gcode_to_api(self, gcode):
+        id = 4758
         gcode_request = {
             "jsonrpc": "2.0",
             "method": "printer.gcode.script",
             "params": {
                 "script": gcode
             },
-            "id": 4758
+            "id": id
         }
-        response = self.request_from_unixsocket(json.dumps(gcode_request))
+        response = self.request_from_unixsocket(json.dumps(gcode_request), id)
         logging.debug("response: %s" % response)
         return response
 
