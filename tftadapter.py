@@ -1,4 +1,3 @@
-import serial
 import atexit
 import sys
 import json
@@ -6,8 +5,9 @@ import time
 import threading
 import logging
 import socket
-import websocket
 import errno
+import websocket
+import serial
 
 class TFTAdapter:
     def __init__(self, config):
@@ -35,7 +35,7 @@ class TFTAdapter:
         self.feed_rate_template = "FR:{fr:}%\nok\n"
         self.flow_rate_template = "E0 Flow: {er:}%\nok\n"
 
-        self.tftSerial = serial.Serial(tft_device, tft_baud)
+        self.tft_serial = serial.Serial(tft_device, tft_baud)
 
         self.lock = threading.Lock()
 
@@ -47,27 +47,21 @@ class TFTAdapter:
 
         self.ws_url = "ws://%s:%s/websocket?token=" % ( printer_ip, str(api_port))
 
-        self.ws = websocket.WebSocketApp(url=self.ws_url,
-                                         on_close=self.on_close,
-                                         on_error=self.on_error,
-                                         on_message=self.on_message,
-                                         on_open=self.on_open)
         #
         #create and start threads
         #
-        t1 = threading.Thread(target=self.ws.run_forever)
-        t2 = threading.Thread(target=self.start)
-        t1.start()
-        t2.start()
+        threading.Thread(target=self.start_socket).start()
+        threading.Thread(target=self.start_serial).start()
 
-    def on_close(self, ws, close_status, close_msg):
-        logging.debug("on_close()...")
-        pass
+    def _on_close(self, ws, close_status, close_msg):
+        logging.debug("Reconnect: %s" % time.ctime())
+        time.sleep(10)
+        self.start_socket() # retry per 10 seconds
 
-    def on_error(self, ws, error):
+    def _on_error(self, ws, error):
         logging.error("Websocket error: %s" % error)
 
-    def on_message(self, ws, msg):
+    def _on_message(self, ws, msg):
 
         response = json.loads(msg)
         status = None
@@ -103,8 +97,7 @@ class TFTAdapter:
             logging.debug("speed_factor: %s" % self.speed_factor)
             logging.debug("extrude_factor: %s" % self.extrude_factor)
 
-    def on_open(self, ws):
-
+    def _on_open(self, ws):
         self.query_data(ws)
 
 
@@ -212,10 +205,10 @@ class TFTAdapter:
         self.sock_error_exit("request timed out")
 
     def write_to_serial(self, data):
-        if self.tftSerial.is_open:
+        if self.tft_serial.is_open:
             self.lock.acquire()
             try:
-                self.tftSerial.write(bytes(data, encoding='utf-8'))
+                self.tft_serial.write(bytes(data, encoding='utf-8'))
             finally:
                 self.lock.release()
         else:
@@ -232,7 +225,10 @@ class TFTAdapter:
         return message
 
     def get_settings(self):
-        message = "FIRMWARE_NAME:Klipper {printer.mcu.mcu_version} SOURCE_CODE_URL:https://github.com/Klipper3d/klipper PROTOCOL_VERSION:1.0 MACHINE_TYPE:Artillery Genius Pro\n"
+        message = "FIRMWARE_NAME:Klipper {printer.mcu.mcu_version}"
+        message = "%s SOURCE_CODE_URL:https://github.com/Klipper3d/klipper" % (message)
+        message = "%s PROTOCOL_VERSION:1.0" % (message)
+        message = "%s MACHINE_TYPE:Artillery Genius Pro\n" % (message)
         message = "%sCap:EEPROM:1\n" % (message)
         message = "%sCap:AUTOREPORT_TEMP:1\n" % (message)
         message = "%sCap:AUTOREPORT_POS:1\n" % (message)
@@ -293,13 +289,21 @@ class TFTAdapter:
         return False
 
     def exit_handler(self):
-        if self.tftSerial.is_open:
-            self.tftSerial.close()
+        if self.tft_serial.is_open:
+            self.tft_serial.close()
         logging.debug("Serial closed")
 
-    def start(self):
+    def start_socket(self):
+        self.ws = websocket.WebSocketApp(url=self.ws_url,
+                                         on_close=self._on_close,
+                                         on_error=self._on_error,
+                                         on_message=self._on_message,
+                                         on_open=self._on_open)
+        self.ws.run_forever()
+
+    def start_serial(self):
         while True:
-            gcode = self.tftSerial.readline().decode("utf-8")
+            gcode = self.tft_serial.readline().decode("utf-8")
             logging.debug("data from serial: %s" % gcode)
             if self.check_is_basic_gcode(gcode):
                 self.send_gcode_to_api(gcode)

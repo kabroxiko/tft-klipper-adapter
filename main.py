@@ -10,7 +10,7 @@ class Printer:
     def get_reactor(self):
         return self.reactor
     def lookup_object(self, name):
-        default = ''
+        default = {"name": name}
         return default
 
 class PrinterConfig:
