@@ -15,7 +15,7 @@ ExecStart=/home/pi/klippy-env/bin/python main.py
 StandardOutput=syslog
 StandardError=syslog
 SyslogIdentifier=tft_adapter
-# Restart=always
-# RestartSec=15
+Restart=always
+RestartSec=15
 
 # sudo ln -s /home/pi/tft-klipper-adapter/tft-klipper-adapter.service /etc/systemd/system/tft-klipper-adapter.service

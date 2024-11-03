@@ -39,7 +39,12 @@ class TFTAdapter:
 
         self.lock = threading.Lock()
 
-        self.acceptable_gcode = ["M104", "M140", "M106", "M84"]
+        self.standard_gcodes = [
+            "M104", # Set Hotend Temperature
+            "M140", # Set Bed Temperature
+            "M106", # Set Fan Speed
+            "M84"   # Disable steppers
+        ]
 
         atexit.register(self.exit_handler)
 
@@ -50,6 +55,16 @@ class TFTAdapter:
         #
         threading.Thread(target=self.start_socket).start()
         threading.Thread(target=self.start_serial).start()
+
+    def write_to_serial(self, data):
+        if self.tft_serial.is_open:
+            self.lock.acquire()
+            try:
+                self.tft_serial.write(bytes(data, encoding='utf-8'))
+            finally:
+                self.lock.release()
+        else:
+            logging.error("serial port is not open")
 
     def _on_close(self, ws, close_status, close_msg):
         logging.info("Reconnecting websocket")
@@ -62,15 +77,15 @@ class TFTAdapter:
     def _on_message(self, ws, msg):
         response = json.loads(msg)
         status = None
+        logging.debug(response)
         if 'id' in response:
             if response["id"] == 5153:
-                logging.debug(response)
                 self.send_firmware_info(response["result"]["software_version"])
             elif response["id"] == 6726:
                 self.send_report_settings(response)
             elif response["id"] == 1234:
                 status = response["result"]["status"]
-                self.add_subscription()
+                self._add_subscription()
 
         elif "method" in response and response['method'] == "notify_status_update":
             status = response["params"][0]
@@ -102,8 +117,9 @@ class TFTAdapter:
     def _on_open(self, ws):
         self.query_status()
         self.query_firmware_info()
+        self.get_temperature()
 
-    def unsubscribe_all(self):
+    def _unsubscribe_all(self):
         data = {
             "jsonrpc": "2.0",
             "method": "printer.objects.subscribe",
@@ -114,7 +130,7 @@ class TFTAdapter:
         }
         self.ws.send(json.dumps(data))
 
-    def add_subscription(self):
+    def _add_subscription(self):
         data = {
             "jsonrpc": "2.0",
             "method": "printer.objects.subscribe",
@@ -144,25 +160,17 @@ class TFTAdapter:
         }
         self.ws.send(json.dumps(query))
 
-    def write_to_serial(self, data):
-        if self.tft_serial.is_open:
-            self.lock.acquire()
-            try:
-                self.tft_serial.write(bytes(data, encoding='utf-8'))
-            finally:
-                self.lock.release()
-        else:
-            logging.error("serial port is not open")
-
     def get_temperature(self):
+        refresh_time = 3
+        threading.Timer(refresh_time, self.get_temperature).start()
         message = self.temp_template.format(
             ETemp   = self.extruder['temperature'],
             ETarget = self.extruder['target'],
             BTemp   = self.heater_bed['temperature'],
             BTarget = self.heater_bed['target']
         )
-        logging.debug(message)
-        return message
+        logging.info(message)
+        self.write_to_serial(message)
 
     def query_firmware_info(self):
         id = 5153
@@ -179,8 +187,8 @@ class TFTAdapter:
         message = "%s PROTOCOL_VERSION:1.0" % (message)
         message = "%s MACHINE_TYPE:Artillery Genius Pro\n" % (message)
         message = "%sCap:EEPROM:1\n" % (message)
-        message = "%sCap:AUTOREPORT_TEMP:0\n" % (message)
-        message = "%sCap:AUTOREPORT_POS:0\n" % (message)
+        message = "%sCap:AUTOREPORT_TEMP:1\n" % (message)
+        message = "%sCap:AUTOREPORT_POS:1\n" % (message)
         message = "%sCap:AUTOLEVEL:1\n" % (message)
         message = "%sCap:Z_PROBE:1\n" % (message)
         message = "%sCap:LEVELING_DATA:0\n" % (message)
@@ -269,7 +277,7 @@ class TFTAdapter:
         logging.info(message)
         self.write_to_serial(message)
 
-    def get_current_position(self):
+    def send_current_position(self):
         message = self.position_template.format(
             x=self.gcode_position[0],
             y=self.gcode_position[1],
@@ -277,21 +285,21 @@ class TFTAdapter:
             e=self.gcode_position[3]
         )
         logging.debug(message)
-        return message
+        self.write_to_serial(message)
 
-    def get_speed_factor(self):
+    def send_speed_factor(self):
         message = self.feed_rate_template.format(fr=self.speed_factor*100)
         logging.debug(message)
-        return message
+        self.write_to_serial(message)
 
-    def get_extrude_factor(self):
+    def send_extrude_factor(self):
         message = self.flow_rate_template.format(er=self.extrude_factor*100)
         logging.debug(message)
-        return message
+        self.write_to_serial(message)
 
     def send_gcode_to_api(self, gcode):
         id = 4758
-        gcode_request = {
+        query = {
             "jsonrpc": "2.0",
             "method": "printer.gcode.script",
             "params": {
@@ -299,12 +307,11 @@ class TFTAdapter:
             },
             "id": id
         }
-        response = self.request_from_unixsocket(json.dumps(gcode_request), id)
-        logging.debug("response: %s" % response)
-        return response
+        self.ws.send(json.dumps(query))
 
-    def check_is_basic_gcode(self, gcode):
-        for g in self.acceptable_gcode:
+
+    def is_standard_gcode(self, gcode):
+        for g in self.standard_gcodes:
             if g in gcode.capitalize():
                 return True
         return False
@@ -326,54 +333,71 @@ class TFTAdapter:
         while True:
             gcode = self.tft_serial.readline().decode("utf-8")
             logging.info("gcode: %s" % gcode)
-            if self.check_is_basic_gcode(gcode):
+            if self.is_standard_gcode(gcode):
+                # Standard Mxxx gcode
                 self.send_gcode_to_api(gcode)
                 self.write_to_serial("ok\n")
-            # Report Temperatures
             elif "M105" in gcode.capitalize():
-                self.write_to_serial(self.get_temperature())
+                # Report Temperatures
+                self.get_temperature()
             elif "M92" in gcode.capitalize():
+                # Set Axis Steps-per-unit (not implemented)
                 pass
-            elif "M90" in gcode.capitalize():
+            elif "G90" in gcode.capitalize():
+                # Absolute Positioning
                 pass
             elif "M82" in gcode.capitalize():
+                # E Absolute
                 pass
             elif "M211" in gcode.capitalize():
+                # Software Endstops
+                pass
+            elif "M154" in gcode.capitalize():
+                # Position Auto-Report
+                pass
+            elif "M420" in gcode.capitalize():
+                # Bed Leveling State
                 pass
             elif "M503" in gcode.capitalize():
-                self.query_report_settings()
-            elif "M503 S0" in gcode.capitalize():
+                # Report Settings
                 self.query_report_settings()
             elif "M155" in gcode.capitalize():
                 # TODO: deshabilitar en firmware
-                logging.debug("enable temperature autoreport")
                 self.write_to_serial("ok\n")
             elif "M115" in gcode.capitalize():
+                # Firmware Info
                 self.query_firmware_info()
             elif "M114" in gcode.capitalize():
-                self.write_to_serial(self.get_current_position())
+                # Get Current Position:
+                self.send_current_position()
             elif "G28" in gcode.capitalize():
+                # Auto Home
                 self.send_gcode_to_api(gcode)
                 self.write_to_serial("ok\n")
-                self.write_to_serial(self.get_current_position())
+                self.send_current_position()
             elif "G1" in gcode.capitalize():
+                # Linear Move
                 self.send_gcode_to_api("G91")
                 self.send_gcode_to_api(gcode)
                 self.send_gcode_to_api("G90")
                 self.write_to_serial("ok\n")
-                # self.write_to_serial(self.get_current_position())
+                # self.write_to_serial(self.send_current_position())
             elif "M220" in gcode.capitalize():
                 if "M220 S" in gcode.upper():
+                    # Set Feedrate Percentage
                     self.send_gcode_to_api(gcode)
                     self.write_to_serial("ok\n")
                 else:
-                    self.write_to_serial(self.get_speed_factor())
+                    # Get Feedrate Percentage
+                    self.send_speed_factor()
             elif "M221" in gcode.capitalize():
                 if "M221 S" in gcode.upper():
                     self.send_gcode_to_api(gcode)
+                    # Set Flow Percentage
                     self.write_to_serial("ok\n")
                 else:
-                    self.write_to_serial(self.get_extrude_factor())
+                    # Get Flow Percentage
+                    self.send_extrude_factor()
             else:
                 logging.warn("unknown command")
 
