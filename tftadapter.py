@@ -8,6 +8,7 @@ import socket
 import errno
 import websocket
 import serial
+import traceback
 
 class TFTAdapter:
     def __init__(self, config):
@@ -56,20 +57,24 @@ class TFTAdapter:
         self.start_socket()
 
     def _on_error(self, ws, error):
-        logging.error("Websocket error: %s" % error)
+        traceback.print_exc()
 
     def _on_message(self, ws, msg):
-
         response = json.loads(msg)
         status = None
-        # logging.debug(response)
-        if 'id' in response and response["id"] == 1234:
-            status = response["result"]["status"]
-            self.add_subscription()
-            # logging.debug(status)
-        if "method" in response and response['method'] == "notify_status_update":
+        if 'id' in response:
+            if response["id"] == 5153:
+                logging.debug(response)
+                self.send_firmware_info(response["result"]["software_version"])
+            elif response["id"] == 6726:
+                self.send_report_settings(response)
+            elif response["id"] == 1234:
+                status = response["result"]["status"]
+                self.add_subscription()
+
+        elif "method" in response and response['method'] == "notify_status_update":
             status = response["params"][0]
-            # logging.debug(status)
+
         if status is not None:
             if 'heater_bed' in status:
                 self.heater_bed["temperature"] = status['heater_bed']["temperature"]
@@ -95,8 +100,8 @@ class TFTAdapter:
             logging.debug("extrude_factor: %s" % self.extrude_factor)
 
     def _on_open(self, ws):
-        self.query_data(ws)
-        self.write_to_serial(self.get_settings())
+        self.query_status()
+        self.query_firmware_info()
 
     def unsubscribe_all(self):
         data = {
@@ -115,91 +120,29 @@ class TFTAdapter:
             "method": "printer.objects.subscribe",
             "params": {
                 "objects": {
-                    "extruder": [ "temperature", "target"],
-                    "heater_bed": ["temperature", "target"],
-                    "gcode_move": ["gcode_position", "speed_factor", "extrude_factor"]
+                    "extruder": None,
+                    "heater_bed": None,
+                    "gcode_move": None
                 }
             },
             "id": 5434
         }
         self.ws.send(json.dumps(data))
 
-    def query_data(self, ws):
-        query_req = {
+    def query_status(self):
+        query = {
             "jsonrpc": "2.0",
             "method": "printer.objects.query",
             "params": {
                 "objects": {
-                    "extruder": [ "temperature", "target"],
-                    "heater_bed": ["temperature", "target"],
-                    "gcode_move": ["gcode_position", "speed_factor", "extrude_factor"]
+                    "extruder": None,
+                    "heater_bed": None,
+                    "gcode_move": None
                 }
             },
             "id": 1234
         }
-        ws.send(json.dumps(query_req))
-
-    def sock_error_exit(self, msg):
-        sys.stderr.write(msg + "\n")
-        sys.exit(-1)
-
-    def process_message(self, msg, id):
-        try:
-            resp = json.loads(msg)
-        except json.JSONDecodeError:
-            return None
-        if resp.get("id", -1) != id:
-            return None
-        if "error" in resp:
-            err = resp["error"].get("message", "Unknown")
-            self.sock_error_exit(
-                "Error: %s" % (err,)
-            )
-        return resp["result"]
-
-    def webhook_socket_create(self):
-        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        while 1:
-            try:
-                sock.connect(self.moonraker_socket_path)
-            except socket.error as e:
-                if e.errno == errno.ECONNREFUSED:
-                    time.sleep(0.1)
-                    continue
-                self.sock_error_exit(
-                    "Unable to connect socket %s [%d,%s]"
-                    % (self.moonraker_socket_path, e.errno, errno.errorcode[e.errno])
-                )
-            break
-        logging.debug("Connected")
-        return sock
-
-    def request_from_unixsocket(self, request, id):
-        whsock = self.webhook_socket_create()
-        whsock.settimeout(1.)
-        whsock.send(request.encode() + b"\x03")
-        sock_data = b""
-        end_time = time.monotonic() + 30.0
-        try:
-            while time.monotonic() < end_time:
-                try:
-                    data = whsock.recv(4096)
-                except TimeoutError:
-                    pass
-                else:
-                    if not data:
-                        self.sock_error_exit("Socket closed before response received")
-                    parts = data.split(b"\x03")
-                    parts[0] = sock_data + parts[0]
-                    sock_data = parts.pop()
-                    for msg in parts:
-                        result = self.process_message(msg, id)
-                        if result is not None:
-                            return result
-                time.sleep(.1)
-        finally:
-            whsock.close()
-        self.sock_error_exit("request timed out")
+        self.ws.send(json.dumps(query))
 
     def write_to_serial(self, data):
         if self.tft_serial.is_open:
@@ -221,15 +164,17 @@ class TFTAdapter:
         logging.debug(message)
         return message
 
-    def get_settings(self):
+    def query_firmware_info(self):
         id = 5153
-        info = {
+        query = {
             "jsonrpc": "2.0",
             "method": "printer.info",
             "id": id
         }
-        response = self.request_from_unixsocket(json.dumps(info), id)
-        message = "FIRMWARE_NAME:Klipper %s" % (response["software_version"])
+        self.ws.send(json.dumps(query))
+
+    def send_firmware_info(self, software_version):
+        message = "FIRMWARE_NAME:Klipper %s" % (software_version)
         message = "%s SOURCE_CODE_URL:https://github.com/Klipper3d/klipper" % (message)
         message = "%s PROTOCOL_VERSION:1.0" % (message)
         message = "%s MACHINE_TYPE:Artillery Genius Pro\n" % (message)
@@ -251,7 +196,78 @@ class TFTAdapter:
         message = "%sCap:BABYSTEPPING:1\n" % (message)
         message = "%sCap:BUILD_PERCENT:1\n" % (message)  # M73 support
         message = "%sCap:CHAMBER_TEMPERATURE:0\n" % (message)
-        return message
+        self.write_to_serial(message)
+
+    def query_report_settings(self):
+        id = 6726
+        query = {
+            "jsonrpc": "2.0",
+            "method": "printer.objects.query",
+            "params": {
+                "objects": {
+                    "configfile": ["settings"],
+                    "toolhead": None,
+                    "gcode_move": ["homing_origin"],
+                    "fan": ["speed"]
+                }
+            },
+            "id": id
+        }
+        self.ws.send(json.dumps(query))
+
+    def send_report_settings(self, response):
+        bltouch = None
+        status = response["result"]["status"]
+        settings = status["configfile"]["settings"]
+        toolhead = status["toolhead"]
+        gcode_move = status["gcode_move"]
+        extruder = settings["extruder"]
+        printer = settings["printer"]
+        bltouch = settings["bltouch"]
+        # Max feedrates (units/s):
+        message = "M203 X%s Y%s Z%s E%s\n" % (
+            toolhead["max_velocity"],
+            toolhead["max_velocity"],
+            printer["max_z_velocity"],
+            extruder["max_extrude_only_velocity"]
+        )
+        # Max Acceleration (units/s2):
+        message = "%sM201 X%s Y%s Z%s E%s\n" % (
+            message,
+            toolhead["max_accel"],
+            toolhead["max_accel"],
+            printer["max_z_accel"],
+            extruder["max_extrude_only_accel"]
+        )
+        # Home offset
+        message = "%sM206 X%s Y%s Z%s\n" % (
+            message,
+            gcode_move["homing_origin"][0],
+            gcode_move["homing_origin"][1],
+            gcode_move["homing_origin"][2]
+        )
+        # Z-Probe Offset
+        if bltouch is not None:
+            message = "%sM851 X%s Y%s Z%s\n" % (
+                message,
+                bltouch["x_offset"],
+                bltouch["y_offset"],
+                bltouch["z_offset"]
+            )
+        # TODO: Respuesta en caso de no tener bltouch
+        # else:
+        #     message = "%sM851 X%s Y%s Z%s\n" % (
+        #         message,
+        #         probe["x_offset"],
+        #         probe["y_offset"],
+        #         probe["z_offset"]
+        #     )
+        # Auto Bed Leveling
+        message = "%sM420 S1 Z%s\n" % (message, settings["bed_mesh"]["fade_end"])
+        # Fan Speed
+        message = "%sM106 S%s\n" % (message, status["fan"]["speed"])
+        logging.info(message)
+        self.write_to_serial(message)
 
     def get_current_position(self):
         message = self.position_template.format(
@@ -309,18 +325,31 @@ class TFTAdapter:
     def start_serial(self):
         while True:
             gcode = self.tft_serial.readline().decode("utf-8")
-            logging.info("data from serial: %s" % gcode)
+            logging.info("gcode: %s" % gcode)
             if self.check_is_basic_gcode(gcode):
                 self.send_gcode_to_api(gcode)
                 self.write_to_serial("ok\n")
+            # Report Temperatures
             elif "M105" in gcode.capitalize():
                 self.write_to_serial(self.get_temperature())
+            elif "M92" in gcode.capitalize():
+                pass
+            elif "M90" in gcode.capitalize():
+                pass
+            elif "M82" in gcode.capitalize():
+                pass
+            elif "M211" in gcode.capitalize():
+                pass
+            elif "M503" in gcode.capitalize():
+                self.query_report_settings()
+            elif "M503 S0" in gcode.capitalize():
+                self.query_report_settings()
             elif "M155" in gcode.capitalize():
                 # TODO: deshabilitar en firmware
                 logging.debug("enable temperature autoreport")
                 self.write_to_serial("ok\n")
             elif "M115" in gcode.capitalize():
-                self.write_to_serial(self.get_settings())
+                self.query_firmware_info()
             elif "M114" in gcode.capitalize():
                 self.write_to_serial(self.get_current_position())
             elif "G28" in gcode.capitalize():
