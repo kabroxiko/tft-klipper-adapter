@@ -43,7 +43,8 @@ class TFTAdapter:
             "M104", # Set Hotend Temperature
             "M140", # Set Bed Temperature
             "M106", # Set Fan Speed
-            "M84"   # Disable steppers
+            "M84",  # Disable steppers
+            "M21"   # Init SD card
         ]
 
         atexit.register(self.exit_handler)
@@ -79,11 +80,17 @@ class TFTAdapter:
         status = None
         logging.debug(response)
         if 'id' in response:
+            if response["id"] == 4758:
+                # gcode response
+                logging.info("Response to gcode: %s" % response)
             if response["id"] == 5153:
+                # Firmware Info response
                 self.send_firmware_info(response["result"]["software_version"])
             elif response["id"] == 6726:
+                # Report Settings response
                 self.send_report_settings(response)
             elif response["id"] == 1234:
+                # Status response
                 status = response["result"]["status"]
                 self._add_subscription()
 
@@ -146,6 +153,7 @@ class TFTAdapter:
         self.ws.send(json.dumps(data))
 
     def query_status(self):
+        # Query Status
         query = {
             "jsonrpc": "2.0",
             "method": "printer.objects.query",
@@ -173,6 +181,7 @@ class TFTAdapter:
         self.write_to_serial(message)
 
     def query_firmware_info(self):
+        # Query firmware Info
         id = 5153
         query = {
             "jsonrpc": "2.0",
@@ -207,6 +216,7 @@ class TFTAdapter:
         self.write_to_serial(message)
 
     def query_report_settings(self):
+        # Query Report Settings
         id = 6726
         query = {
             "jsonrpc": "2.0",
