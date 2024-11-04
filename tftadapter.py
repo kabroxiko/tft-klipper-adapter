@@ -6,7 +6,9 @@ import threading
 import logging
 import socket
 import errno
+import websockets
 import websocket
+import asyncio
 import serial
 import traceback
 
@@ -44,9 +46,11 @@ class TFTAdapter:
             "M140", # Set Bed Temperature
             "M106", # Set Fan Speed
             "M84",  # Disable steppers
+            "G90",  # Absolute Positioning
+            "G91",  # Relative Positioning
+            "G0",   # Linear Move
             "M21"   # Init SD card
         ]
-
         atexit.register(self.exit_handler)
 
         self.ws_url = "%s/websocket?token=" % (moonraker_url)
@@ -154,6 +158,7 @@ class TFTAdapter:
 
     def query_status(self):
         # Query Status
+        id = 1234
         query = {
             "jsonrpc": "2.0",
             "method": "printer.objects.query",
@@ -164,7 +169,7 @@ class TFTAdapter:
                     "gcode_move": None
                 }
             },
-            "id": 1234
+            "id": id
         }
         self.ws.send(json.dumps(query))
 
@@ -307,18 +312,23 @@ class TFTAdapter:
         logging.debug(message)
         self.write_to_serial(message)
 
+    def send_query(self, query):
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        result = loop.run_until_complete(self.send_receive_message(self.ws_url, query))
+        loop.close()
+        return result
+
     def send_gcode_to_api(self, gcode):
-        id = 4758
         query = {
             "jsonrpc": "2.0",
             "method": "printer.gcode.script",
             "params": {
                 "script": gcode
             },
-            "id": id
+            "id": 4758
         }
-        self.ws.send(json.dumps(query))
-
+        return self.send_query(query)
 
     def is_standard_gcode(self, gcode):
         for g in self.standard_gcodes:
@@ -339,22 +349,35 @@ class TFTAdapter:
                                          on_open=self._on_open)
         self.ws.run_forever()
 
+    async def send_receive_message(self, uri, query):
+        async with websockets.connect(uri) as websocket:
+            await websocket.send(json.dumps(query))
+            response = None
+            while response is None or response.get("id", -1) != query["id"]:
+                reply = await websocket.recv()
+                #logging.info("@@@@@@@@@@@@@@@@: %s" % reply)
+                response = json.loads(reply)
+            if response.get("result") is not None:
+                result = response.get("result")
+            elif response.get("error") is not None:
+                result = "{Error:%s\n}" % response.get("error").get("message").replace("\n", " ")
+            logging.info("The reply is: %s" % result)
+            return result
+
     def start_serial(self):
         while True:
             gcode = self.tft_serial.readline().decode("utf-8")
             logging.info("gcode: %s" % gcode)
             if self.is_standard_gcode(gcode):
                 # Standard Mxxx gcode
-                self.send_gcode_to_api(gcode)
-                self.write_to_serial("ok\n")
+                result = self.send_gcode_to_api(gcode)
+                logging.info("result: %s" % result)
+                self.write_to_serial(result)
             elif "M105" in gcode.capitalize():
                 # Report Temperatures
                 self.get_temperature()
             elif "M92" in gcode.capitalize():
                 # Set Axis Steps-per-unit (not implemented)
-                pass
-            elif "G90" in gcode.capitalize():
-                # Absolute Positioning
                 pass
             elif "M82" in gcode.capitalize():
                 # E Absolute
@@ -382,9 +405,8 @@ class TFTAdapter:
                 self.send_current_position()
             elif "G28" in gcode.capitalize():
                 # Auto Home
-                self.send_gcode_to_api(gcode)
-                self.write_to_serial("ok\n")
-                self.send_current_position()
+                result = self.send_gcode_to_api(gcode)
+                self.write_to_serial(result)
             elif "G1" in gcode.capitalize():
                 # Linear Move
                 self.send_gcode_to_api("G91")
