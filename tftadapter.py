@@ -35,6 +35,7 @@ class TFTAdapter:
         self.position_tmpl = "X:{x:.2f} Y:{y:.2f} Z:{z:.2f} E:{e:.2f} \nok\n"
         self.feed_rate_tmpl = "FR:{fr:}%\nok\n"
         self.flow_rate_tmpl = "E0 Flow: {er:}%\nok\n"
+        self.firmware_info = ""
 
         self.tft_serial = serial.Serial(tft_device, tft_baud)
 
@@ -47,8 +48,7 @@ class TFTAdapter:
             "M84",  # Disable steppers
             "G90",  # Absolute Positioning
             "G91",  # Relative Positioning
-            "G0",   # Linear Move
-            "M21"   # Init SD card
+            "G0"    # Linear Move
         ]
         atexit.register(self.exit_handler)
 
@@ -60,12 +60,13 @@ class TFTAdapter:
         threading.Thread(target=self.start_socket).start()
         threading.Thread(target=self.start_serial).start()
 
-    def write_to_serial(self, data):
+    def write_to_serial(self, message):
         if self.tft_serial.is_open:
             self.lock.acquire()
             try:
-                logging.info("data: %s" % data.replace("\n", "\\n"))
-                self.tft_serial.write(bytes(data, encoding='utf-8'))
+                for data in message.splitlines():
+                    logging.info("message: %s" % data)
+                self.tft_serial.write(bytes(message, encoding='utf-8'))
             finally:
                 self.lock.release()
         else:
@@ -113,7 +114,6 @@ class TFTAdapter:
     def start_socket(self):
         self.query_status()
         self.query_firmware_info()
-        self.get_temperature()
         asyncio.run(self.listen())
 
     def websocket_send(self, query):
@@ -170,8 +170,6 @@ class TFTAdapter:
         self.set_status(status)
 
     def get_temperature(self):
-        refresh_time = 3
-        threading.Timer(refresh_time, self.get_temperature).start()
         message = self.temperature_tmpl.format(
             ETemp   = self.extruder['temperature'],
             ETarget = self.extruder['target'],
@@ -179,6 +177,11 @@ class TFTAdapter:
             BTarget = self.heater_bed['target']
         )
         self.write_to_serial(message)
+
+    def auto_get_temperature(self):
+        refresh_time = 3
+        threading.Timer(refresh_time, self.auto_get_temperature).start()
+        self.get_temperature()
 
     def get_firmware_info(self, software_version):
         message = "FIRMWARE_NAME:Klipper %s" % (software_version)
@@ -214,8 +217,7 @@ class TFTAdapter:
             "id": id
         }
         response = self.websocket_send(query)
-        firmware_info = self.get_firmware_info(response["software_version"])
-        self.write_to_serial(firmware_info)
+        self.firmware_info = self.get_firmware_info(response["software_version"])
 
     def get_report_settings(self, status):
         bltouch = None
@@ -316,8 +318,42 @@ class TFTAdapter:
             },
             "id": 4758
         }
-        logging.info("Response to gcode: %s" % message)
-        return self.websocket_send(query)
+        response = self.websocket_send(query)
+        logging.info("Response to gcode %s: %s" % (gcode.replace('\n',''), response))
+        return response
+
+    def get_sd_files(self):
+        query = {
+            "jsonrpc": "2.0",
+            "method": "server.files.list",
+            "params": {
+                "root": "gcodes"
+            },
+            "id": 4644
+        }
+        response = self.websocket_send(query)
+        message = "Begin file list\n"
+        message = "%scase_1.gcode 4139710\n" % message
+        message = "%sEnd file list\n" % message
+        message = "%sok\n" % message
+        logging.info("Response: %s" % message)
+        return message
+
+    def get_file_metadata(self, filename):
+        query = {
+            "jsonrpc": "2.0",
+            "method": "server.files.metadata",
+            "params": {
+                "filename": "filename"
+            },
+            "id": 3545
+        }
+        response = self.websocket_send(query)
+        message = "File opened:%s Size:%s\n" % (response["filename"], response["size"])
+        message = "%sFile selected\n" % message
+        message = "%sok\n" % message
+        logging.info("Response: %s" % message)
+        return message
 
     def is_standard_gcode(self, gcode):
         for g in self.standard_gcodes:
@@ -376,7 +412,7 @@ class TFTAdapter:
         while True:
             try:
                 gcode = self.tft_serial.readline().decode("utf-8")
-                logging.info("gcode: %s" % gcode)
+                logging.info("gcode: %s" % gcode.replace('\n',''))
                 if self.is_standard_gcode(gcode):
                     # Standard Mxxx gcode
                     response = self.send_gcode_to_api(gcode)
@@ -387,13 +423,13 @@ class TFTAdapter:
                     self.get_temperature()
                 elif "M92" in gcode.capitalize():
                     # Set Axis Steps-per-unit (not implemented)
-                    pass
+                    self.write_to_serial("ok\n")
                 elif "M82" in gcode.capitalize():
                     # E Absolute
                     pass
                 elif "M211" in gcode.capitalize():
                     # Software Endstops
-                    pass
+                    self.write_to_serial("ok\n")
                 elif "M154" in gcode.capitalize():
                     # Position Auto-Report
                     pass
@@ -408,10 +444,28 @@ class TFTAdapter:
                     self.write_to_serial("ok\n")
                 elif "M115" in gcode.capitalize():
                     # Firmware Info
-                    self.query_firmware_info()
+                    self.auto_get_temperature()
+                    self.write_to_serial(self.firmware_info)
                 elif "M114" in gcode.capitalize():
                     # Get Current Position:
                     self.send_current_position()
+                elif "M21" in gcode.capitalize():
+                    # Init SD card
+                    self.send_gcode_to_api(gcode)
+                    self.write_to_serial("SD card ok\n")
+                elif "M20" in gcode.upper():
+                    # List SD Card
+                    response = self.get_sd_files()
+                    self.write_to_serial(response)
+                elif "M33" in gcode.capitalize():
+                    # Get Long Path
+                    filename = gcode.split(" ")[1]
+                    self.write_to_serial("%s\n" % filename)
+                elif "M23" in gcode.capitalize():
+                    # Select SD file
+                    response = self.get_file_metadata()
+                    logging.debug("response: %s" % response)
+                    self.write_to_serial(response)
                 elif "G28" in gcode.capitalize():
                     # Auto Home
                     response = self.send_gcode_to_api(gcode)
@@ -441,7 +495,7 @@ class TFTAdapter:
                         # Get Flow Percentage
                         self.send_extrude_factor()
                 else:
-                    logging.warn("unknown command")
+                    logging.warning("unknown command")
             except Exception as ex:
                 logging.error("Serial Error: %s" % ex)
 #
@@ -449,3 +503,43 @@ class TFTAdapter:
 #
 def load_config(config):
     return TFTAdapter(config)
+
+class Printer:
+    def __init__(self):
+        self.reactor = ''
+    def get_reactor(self):
+        return self.reactor
+    def lookup_object(self, name):
+        default = {"name": name}
+        return default
+
+class PrinterConfig:
+    def __init__(self):
+        self.printer = Printer()
+    def get_printer(self):
+        return self.printer
+    def get(self, key):
+        if key == 'tft_device':
+            return tft_device
+        elif key == 'moonraker_uri':
+            return moonraker_uri
+        else:
+            exit(1)
+    def getint(self, key):
+        if key == 'tft_baud':
+            return tft_baud
+
+logging.basicConfig(format='%(message)s',level=logging.INFO)
+tft_device = '/dev/ttyS2'
+moonraker_uri = 'ws://127.0.0.1:7125'
+tft_baud = 115200
+# usage = "%prog [options] <config file>"
+# opts = optparse.OptionParser(usage)
+# opts.add_option("-l", "--logfile", dest="logfile",
+#                 help="write log to file instead of stderr")
+# options, args = opts.parse_args()
+# if len(args) != 1:
+#     opts.error("Incorrect number of arguments")
+
+config = PrinterConfig()
+load_config(config)
