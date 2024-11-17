@@ -10,21 +10,10 @@ import websockets
 import asyncio
 import serial
 import traceback
+import argparse
 
 class TFTAdapter:
-    def __init__(self, config):
-        self.config = config
-        self.printer = config.get_printer()
-        self.reactor = self.printer.get_reactor()
-        self.gcode = self.printer.lookup_object('gcode')
-
-        tft_device = config.get('tft_device')
-        tft_baud = config.getint('tft_baud')
-        moonraker_uri = config.get('moonraker_uri')
-        self.moonraker_socket_path = "/home/pi/printer_data/comms/moonraker.sock"
-
-        # self.gcode_url_tmpl = moonraker_uri+"/printer/gcode/script?script={g:s}"
-
+    def __init__(self):
         self.heater_bed = {"temperature": 0, "target": 0}
         self.extruder = {"temperature": 0, "target": 0}
         self.gcode_position = [0, 0, 0, 0]
@@ -37,7 +26,7 @@ class TFTAdapter:
         self.flow_rate_tmpl = "E0 Flow: {er:}%\nok\n"
         self.firmware_info = ""
 
-        self.tft_serial = serial.Serial(tft_device, tft_baud)
+        self.tft_serial = serial.Serial(args.tft_device, args.tft_baud)
 
         self.lock = threading.Lock()
 
@@ -52,7 +41,7 @@ class TFTAdapter:
         ]
         atexit.register(self.exit_handler)
 
-        self.ws_uri = "%s/websocket?token=" % (moonraker_uri)
+        self.ws_uri = "%s/websocket?token=" % (args.moonraker_uri)
 
         #
         #create and start threads
@@ -498,48 +487,25 @@ class TFTAdapter:
                     logging.warning("unknown command")
             except Exception as ex:
                 logging.error("Serial Error: %s" % ex)
-#
-#config loading function of add-on
-#
-def load_config(config):
-    return TFTAdapter(config)
 
-class Printer:
-    def __init__(self):
-        self.reactor = ''
-    def get_reactor(self):
-        return self.reactor
-    def lookup_object(self, name):
-        default = {"name": name}
-        return default
 
-class PrinterConfig:
-    def __init__(self):
-        self.printer = Printer()
-    def get_printer(self):
-        return self.printer
-    def get(self, key):
-        if key == 'tft_device':
-            return tft_device
-        elif key == 'moonraker_uri':
-            return moonraker_uri
-        else:
-            exit(1)
-    def getint(self, key):
-        if key == 'tft_baud':
-            return tft_baud
+parser = argparse.ArgumentParser()
+parser.add_argument('-t', '--tft_device', help='tty device', required=True)
+parser.add_argument('-b', '--tft_baud', help='bauds', default="115200")
+parser.add_argument('-u', '--moonraker_uri', help='moonraket api uri', default="ws://127.0.0.1:7125")
+parser.add_argument('-l', '--logfile', help='write log to file instead of stderr')
+parser.add_argument('-v', '--verbose', help='debug mode', action="store_true")
+args = parser.parse_args()
 
-logging.basicConfig(format='%(message)s',level=logging.INFO)
-tft_device = '/dev/ttyS2'
-moonraker_uri = 'ws://127.0.0.1:7125'
-tft_baud = 115200
-# usage = "%prog [options] <config file>"
-# opts = optparse.OptionParser(usage)
-# opts.add_option("-l", "--logfile", dest="logfile",
-#                 help="write log to file instead of stderr")
-# options, args = opts.parse_args()
-# if len(args) != 1:
-#     opts.error("Incorrect number of arguments")
+handler = logging.FileHandler('my_log_info.log')
 
-config = PrinterConfig()
-load_config(config)
+logging.basicConfig(handlers = [
+                            logging.FileHandler(args.logfile)
+                                if args.logfile
+                                else logging.StreamHandler(stream=sys.stdout)
+                        ],
+                    encoding='utf-8',
+                    format='%(message)s',
+                    level=logging.DEBUG if args.verbose else logging.INFO)
+
+TFTAdapter()
