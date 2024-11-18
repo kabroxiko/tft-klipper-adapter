@@ -27,6 +27,7 @@ class TFTAdapter:
         self.firmware_info = ""
 
         self.tft_serial = serial.Serial(args.tft_device, args.tft_baud)
+        self.autotemperature = "off"
 
         self.lock = threading.Lock()
 
@@ -78,11 +79,13 @@ class TFTAdapter:
 
     def set_status(self, status):
         if 'heater_bed' in status:
-            self.heater_bed["temperature"] = status['heater_bed']["temperature"]
+            if "temperature" in status['heater_bed']:
+                self.heater_bed["temperature"] = status['heater_bed']["temperature"]
             if "target" in status['heater_bed']:
                 self.heater_bed["target"] = status['heater_bed']["target"]
         if 'extruder' in status:
-            self.extruder["temperature"] = status['extruder']["temperature"]
+            if "temperature" in status['extruder']:
+                self.extruder["temperature"] = status['extruder']["temperature"]
             if "target" in status['extruder']:
                 self.extruder["target"] = status['extruder']["target"]
         if 'gcode_move' in status:
@@ -102,7 +105,9 @@ class TFTAdapter:
 
     def start_socket(self):
         self.query_status()
+        self.auto_get_temperature()
         self.query_firmware_info()
+        # self.get_subscriptions()
         asyncio.run(self.listen())
 
     def websocket_send(self, query):
@@ -168,6 +173,7 @@ class TFTAdapter:
         self.write_to_serial(message)
 
     def auto_get_temperature(self):
+        self.autotemperature = "on"
         refresh_time = 3
         threading.Timer(refresh_time, self.auto_get_temperature).start()
         self.get_temperature()
@@ -328,16 +334,30 @@ class TFTAdapter:
         logging.info("Response: %s" % message)
         return message
 
+    # def get_subscriptions(self):
+    #     query = {
+    #         "jsonrpc": "2.0",
+    #         "method": "server.announcements.list",
+    #         "params": {
+    #             "include_dismissed": "false"
+    #         },
+    #         "id": 4654
+    #     }
+    #     response = self.websocket_send(query)
+    #     logging.info("Response: %s" % response)
+
     def get_file_metadata(self, filename):
+        logging.info("filename: <%s>" % filename)
         query = {
             "jsonrpc": "2.0",
             "method": "server.files.metadata",
             "params": {
-                "filename": "filename"
+                "filename": filename
             },
             "id": 3545
         }
         response = self.websocket_send(query)
+        logging.info("Response: %s" % response)
         message = "File opened:%s Size:%s\n" % (response["filename"], response["size"])
         message = "%sFile selected\n" % message
         message = "%sok\n" % message
@@ -409,7 +429,8 @@ class TFTAdapter:
                     self.write_to_serial(response)
                 elif "M105" in gcode.capitalize():
                     # Report Temperatures
-                    self.get_temperature()
+                    if self.autotemperature != "on":
+                        self.get_temperature()
                 elif "M92" in gcode.capitalize():
                     # Set Axis Steps-per-unit (not implemented)
                     self.write_to_serial("ok\n")
@@ -429,11 +450,11 @@ class TFTAdapter:
                     # Report Settings
                     self.query_report_settings()
                 elif "M155" in gcode.capitalize():
-                    # TODO: deshabilitar en firmware
+                    if self.autotemperature != "on":
+                        self.auto_get_temperature()
                     self.write_to_serial("ok\n")
                 elif "M115" in gcode.capitalize():
                     # Firmware Info
-                    self.auto_get_temperature()
                     self.write_to_serial(self.firmware_info)
                 elif "M114" in gcode.capitalize():
                     # Get Current Position:
@@ -452,7 +473,40 @@ class TFTAdapter:
                     self.write_to_serial("%s\n" % filename)
                 elif "M23" in gcode.capitalize():
                     # Select SD file
-                    response = self.get_file_metadata()
+                    self.send_gcode_to_api(gcode)
+                    filename = gcode.split("/")[1]
+                    response = self.get_file_metadata(filename.replace('\n',''))
+                    logging.debug("response: %s" % response)
+                    self.write_to_serial(response)
+                elif "M27" in gcode.capitalize():
+                    # Report SD print status
+                    # TODO: agregar manejo de M27 S3
+                    response = self.send_gcode_to_api(gcode)
+                    logging.debug("response: %s" % response)
+                    self.write_to_serial(response)
+                elif "M24" in gcode.capitalize():
+                    # Start or Resume SD print
+                    response = self.send_gcode_to_api(gcode)
+                    logging.debug("response: %s" % response)
+                    self.write_to_serial(response)
+                elif "M25" in gcode.capitalize():
+                    # Pause SD print
+                    response = self.send_gcode_to_api(gcode)
+                    logging.debug("response: %s" % response)
+                    self.write_to_serial(response)
+                elif "M524" in gcode.capitalize():
+                    # Abort SD print
+                    response = self.send_gcode_to_api(gcode)
+                    logging.debug("response: %s" % response)
+                    self.write_to_serial(response)
+                elif "M118 P0 A1 action:cancel" in gcode.capitalize():
+                    # Serial print
+                    response = self.send_gcode_to_api(gcode)
+                    logging.debug("response: %s" % response)
+                    self.write_to_serial(response)
+                elif "M108" in gcode.capitalize():
+                    # Break and Continue
+                    response = self.send_gcode_to_api(gcode)
                     logging.debug("response: %s" % response)
                     self.write_to_serial(response)
                 elif "G28" in gcode.capitalize():
@@ -486,6 +540,7 @@ class TFTAdapter:
                 else:
                     logging.warning("unknown command")
             except Exception as ex:
+                # traceback.print_exc()
                 logging.error("Serial Error: %s" % ex)
 
 
