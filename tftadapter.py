@@ -107,8 +107,7 @@ class TFTAdapter:
         self.query_status()
         self.auto_get_temperature()
         self.query_firmware_info()
-        # self.get_subscriptions()
-        asyncio.run(self.listen())
+        asyncio.run(self._listen_subscription())
 
     def websocket_send(self, query):
         loop = asyncio.new_event_loop()
@@ -128,21 +127,6 @@ class TFTAdapter:
             "id": 4654
         }
         self.ws.send(json.dumps(data))
-
-    # def _add_subscription(self):
-    #     data = {
-    #         "jsonrpc": "2.0",
-    #         "method": "printer.objects.subscribe",
-    #         "params": {
-    #             "objects": {
-    #                 "extruder": None,
-    #                 "heater_bed": None,
-    #                 "gcode_move": None
-    #             }
-    #         },
-    #         "id": 5434
-    #     }
-    #     self.ws.send(json.dumps(data))
 
     def query_status(self):
         # Query Status
@@ -318,6 +302,7 @@ class TFTAdapter:
         return response
 
     def get_sd_files(self):
+        start = time.time()
         query = {
             "jsonrpc": "2.0",
             "method": "server.files.list",
@@ -328,23 +313,13 @@ class TFTAdapter:
         }
         response = self.websocket_send(query)
         message = "Begin file list\n"
-        message = "%scase_1.gcode 4139710\n" % message
+        for file in response:
+            message = "%s%s %s\n" % (message, file["path"], file["size"])
         message = "%sEnd file list\n" % message
         message = "%sok\n" % message
-        logging.info("Response: %s" % message)
+        end = time.time()
+        logging.info("Response (%s): %s" % (end - start, message))
         return message
-
-    # def get_subscriptions(self):
-    #     query = {
-    #         "jsonrpc": "2.0",
-    #         "method": "server.announcements.list",
-    #         "params": {
-    #             "include_dismissed": "false"
-    #         },
-    #         "id": 4654
-    #     }
-    #     response = self.websocket_send(query)
-    #     logging.info("Response: %s" % response)
 
     def get_file_metadata(self, filename):
         logging.info("filename: <%s>" % filename)
@@ -375,7 +350,7 @@ class TFTAdapter:
             self.tft_serial.close()
         logging.debug("Serial closed")
 
-    async def listen(self):
+    async def _listen_subscription(self):
         async with websockets.connect(self.ws_uri) as webservice:
             try:
                 data = {
@@ -496,16 +471,21 @@ class TFTAdapter:
                     self.write_to_serial(response)
                 elif "M524" in gcode.capitalize():
                     # Abort SD print
-                    response = self.send_gcode_to_api(gcode)
+                    response = self.send_gcode_to_api("CANCEL_PRINT")
                     logging.debug("response: %s" % response)
                     self.write_to_serial(response)
-                elif "M118 P0 A1 action:cancel" in gcode.capitalize():
+                elif "M118" in gcode.capitalize():
                     # Serial print
+                    # message = gcode.split(" ", 1)[1]
+                    # logging.debug("response: %s" % message)
+                    # if message == "P0 A1 action:cancel":
+                    #     response = self.send_gcode_to_api("CANCEL_PRINT")
                     response = self.send_gcode_to_api(gcode)
                     logging.debug("response: %s" % response)
                     self.write_to_serial(response)
                 elif "M108" in gcode.capitalize():
                     # Break and Continue
+                    # Ignore
                     response = self.send_gcode_to_api(gcode)
                     logging.debug("response: %s" % response)
                     self.write_to_serial(response)
