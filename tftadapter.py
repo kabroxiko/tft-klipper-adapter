@@ -6,14 +6,51 @@ import threading
 import logging
 import socket
 import errno
-import websockets
+from websockets import connect
 import asyncio
 import serial
 import traceback
 import argparse
 
+class Handler:
+    def __init__(self):
+        self.ws = None
+        self.ws_uri = "%s/websocket?token=" % (args.moonraker_uri)
+        self.loop = asyncio.get_event_loop()
+        # perform a synchronous connect
+        self.loop.run_until_complete(self.__async__connect())
+
+    async def __async__connect(self):
+        logging.info("attempting connection to {}".format(self.ws_uri))
+        # perform async connect, and store the connected WebSocketClientProtocol
+        # object, for later reuse for send & recv
+        self.ws = await connect(self.ws_uri)
+        logging.info("connected")
+
+    def command(self, cmd):
+        logging.debug("query: %s" % cmd)
+        response = self.loop.run_until_complete(self.__async__command(cmd))
+        logging.debug("response: %s" % response)
+        return response
+
+    async def __async__command(self, cmd):
+        await self.ws.send(json.dumps(cmd))
+        response = None
+        while response is None or response.get("id", -1) != cmd["id"]:
+            reply = await self.ws.recv()
+            response = json.loads(reply)
+
+        if response.get("result") is not None:
+            result = response.get("result")
+        elif response.get("error") is not None:
+            result = "Error:%s\n" % response.get("error").get("message").replace("\n", " ")
+
+        logging.debug("result: %s" % result)
+        return result
+
 class TFTAdapter:
     def __init__(self):
+        self.handler = Handler()
         self.heater_bed = {"temperature": 0, "target": 0}
         self.extruder = {"temperature": 0, "target": 0}
         self.gcode_position = [0, 0, 0, 0]
@@ -42,8 +79,6 @@ class TFTAdapter:
         ]
         atexit.register(self.exit_handler)
 
-        self.ws_uri = "%s/websocket?token=" % (args.moonraker_uri)
-
         #
         #create and start threads
         #
@@ -69,13 +104,6 @@ class TFTAdapter:
 
     def _on_error(self, ws, error):
         traceback.print_exc()
-
-    def _on_message(self, message):
-        status = None
-        logging.debug("message: %s" % message)
-        if "method" in message and message['method'] == "notify_status_update":
-            status = message["params"][0]
-            self.set_status(status)
 
     def set_status(self, status):
         if 'heater_bed' in status:
@@ -105,28 +133,28 @@ class TFTAdapter:
 
     def start_socket(self):
         self.query_status()
-        self.auto_get_temperature()
+        # self.auto_get_temperature()
         self.query_firmware_info()
-        asyncio.run(self._listen_subscription())
+        # asyncio.run(self._listen_subscription())
 
-    def websocket_send(self, query):
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        result = loop.run_until_complete(self.send_receive_message(self.ws_uri, query))
-        loop.close()
-        logging.debug("result: %s" % result)
-        return result
+    # def websocket_send(self, query):
+    #     loop = asyncio.new_event_loop()
+    #     asyncio.set_event_loop(loop)
+    #     result = loop.run_until_complete(self.send_receive_message(self.ws_uri, query))
+    #     loop.close()
+    #     logging.debug("result: %s" % result)
+    #     return result
 
-    def _unsubscribe_all(self):
-        data = {
-            "jsonrpc": "2.0",
-            "method": "printer.objects.subscribe",
-            "params": {
-                "objects": { },
-            },
-            "id": 4654
-        }
-        self.ws.send(json.dumps(data))
+    # def _unsubscribe_all(self):
+    #     data = {
+    #         "jsonrpc": "2.0",
+    #         "method": "printer.objects.subscribe",
+    #         "params": {
+    #             "objects": { },
+    #         },
+    #         "id": 4654
+    #     }
+    #     self.ws.send(json.dumps(data))
 
     def query_status(self):
         # Query Status
@@ -142,9 +170,10 @@ class TFTAdapter:
             },
             "id": 1234
         }
-        response = self.websocket_send(query)
-        logging.debug("response: %s" % response)
+        response = self.handler.command(query)
         status = response["status"]
+        logging.debug("status: %s" % status)
+
         self.set_status(status)
 
     def get_temperature(self):
@@ -156,11 +185,11 @@ class TFTAdapter:
         )
         self.write_to_serial(message)
 
-    def auto_get_temperature(self):
-        self.autotemperature = "on"
-        refresh_time = 3
-        threading.Timer(refresh_time, self.auto_get_temperature).start()
-        self.get_temperature()
+    # def auto_get_temperature(self):
+    #     self.autotemperature = "on"
+    #     refresh_time = 3
+    #     threading.Timer(refresh_time, self.auto_get_temperature).start()
+    #     self.get_temperature()
 
     def get_firmware_info(self, software_version):
         message = "FIRMWARE_NAME:Klipper %s" % (software_version)
@@ -195,7 +224,7 @@ class TFTAdapter:
             "method": "printer.info",
             "id": id
         }
-        response = self.websocket_send(query)
+        response = self.handler.command(query)
         self.firmware_info = self.get_firmware_info(response["software_version"])
 
     def get_report_settings(self, status):
@@ -267,7 +296,7 @@ class TFTAdapter:
             },
             "id": id
         }
-        response = self.websocket_send(query)
+        response = self.handler.command(query)
         report_settings = self.get_report_settings(response["status"])
         self.write_to_serial(report_settings)
 
@@ -297,7 +326,7 @@ class TFTAdapter:
             },
             "id": 4758
         }
-        response = self.websocket_send(query)
+        response = self.handler.command(query)
         logging.info("Response to gcode %s: %s" % (gcode.replace('\n',''), response))
         return response
 
@@ -311,7 +340,7 @@ class TFTAdapter:
             },
             "id": 4644
         }
-        response = self.websocket_send(query)
+        response = self.handler.command(query)
         message = "Begin file list\n"
         for file in response:
             message = "%s%s %s\n" % (message, file["path"], file["size"])
@@ -331,7 +360,7 @@ class TFTAdapter:
             },
             "id": 3545
         }
-        response = self.websocket_send(query)
+        response = self.handler.command(query)
         logging.info("Response: %s" % response)
         message = "File opened:%s Size:%s\n" % (response["filename"], response["size"])
         message = "%sFile selected\n" % message
@@ -350,47 +379,23 @@ class TFTAdapter:
             self.tft_serial.close()
         logging.debug("Serial closed")
 
-    async def _listen_subscription(self):
-        async with websockets.connect(self.ws_uri) as webservice:
-            try:
-                data = {
-                    "jsonrpc": "2.0",
-                    "method": "printer.objects.subscribe",
-                    "params": {
-                        "objects": {
-                            "extruder": None,
-                            "heater_bed": None,
-                            "gcode_move": None
-                        }
-                    },
-                    "id": 5434
-                }
-                await webservice.send(json.dumps(data))
-            except ConnectionResetError:
-                logging.error("ConnectionResetError, reconnecting...")
+    # async def _listen_subscription(self):
+    #     data = {
+    #         "jsonrpc": "2.0",
+    #         "method": "printer.objects.subscribe",
+    #         "params": {
+    #             "objects": {
+    #                 "extruder": None,
+    #                 "heater_bed": None,
+    #                 "gcode_move": None
+    #             }
+    #         },
+    #         "id": 5434
+    #     }
+    #     self.handler.command(data)
 
-            while True:
-                msg = await webservice.recv()
-                msg = json.loads(msg)
-                self._on_message(msg)
-
-    async def send_receive_message(self, uri, query):
-        async with websockets.connect(uri) as websocket:
-            await websocket.send(json.dumps(query))
-            response = None
-            result = None
-            while response is None or response.get("id", -1) != query["id"]:
-                reply = await websocket.recv()
-                logging.debug("reply: %s" % reply)
-                response = json.loads(reply)
-
-            if response.get("result") is not None:
-                result = response.get("result")
-            elif response.get("error") is not None:
-                result = "Error:%s\n" % response.get("error").get("message").replace("\n", " ")
-
-            logging.debug("result: %s" % result)
-            return result
+    #     while True:
+    #         self._on_message()
 
     def start_serial(self):
         while True:
@@ -400,12 +405,11 @@ class TFTAdapter:
                 if self.is_standard_gcode(gcode):
                     # Standard Mxxx gcode
                     response = self.send_gcode_to_api(gcode)
-                    logging.debug("response: %s" % response)
                     self.write_to_serial(response)
                 elif "M105" in gcode.capitalize():
                     # Report Temperatures
-                    if self.autotemperature != "on":
-                        self.get_temperature()
+                    self.query_status()
+                    self.get_temperature()
                 elif "M92" in gcode.capitalize():
                     # Set Axis Steps-per-unit (not implemented)
                     self.write_to_serial("ok\n")
@@ -425,8 +429,9 @@ class TFTAdapter:
                     # Report Settings
                     self.query_report_settings()
                 elif "M155" in gcode.capitalize():
-                    if self.autotemperature != "on":
-                        self.auto_get_temperature()
+                    # Temperature Auto-Report
+                    # if self.autotemperature != "on":
+                    #     self.auto_get_temperature()
                     self.write_to_serial("ok\n")
                 elif "M115" in gcode.capitalize():
                     # Firmware Info
@@ -451,48 +456,39 @@ class TFTAdapter:
                     self.send_gcode_to_api(gcode)
                     filename = gcode.split("/")[1]
                     response = self.get_file_metadata(filename.replace('\n',''))
-                    logging.debug("response: %s" % response)
                     self.write_to_serial(response)
                 elif "M27" in gcode.capitalize():
                     # Report SD print status
                     # TODO: agregar manejo de M27 S3
                     response = self.send_gcode_to_api(gcode)
-                    logging.debug("response: %s" % response)
                     self.write_to_serial(response)
                 elif "M24" in gcode.capitalize():
                     # Start or Resume SD print
                     response = self.send_gcode_to_api(gcode)
-                    logging.debug("response: %s" % response)
                     self.write_to_serial(response)
                 elif "M25" in gcode.capitalize():
                     # Pause SD print
                     response = self.send_gcode_to_api(gcode)
-                    logging.debug("response: %s" % response)
                     self.write_to_serial(response)
                 elif "M524" in gcode.capitalize():
                     # Abort SD print
                     response = self.send_gcode_to_api("CANCEL_PRINT")
-                    logging.debug("response: %s" % response)
                     self.write_to_serial(response)
                 elif "M118" in gcode.capitalize():
                     # Serial print
                     # message = gcode.split(" ", 1)[1]
-                    # logging.debug("response: %s" % message)
                     # if message == "P0 A1 action:cancel":
                     #     response = self.send_gcode_to_api("CANCEL_PRINT")
                     response = self.send_gcode_to_api(gcode)
-                    logging.debug("response: %s" % response)
                     self.write_to_serial(response)
                 elif "M108" in gcode.capitalize():
                     # Break and Continue
                     # Ignore
                     response = self.send_gcode_to_api(gcode)
-                    logging.debug("response: %s" % response)
                     self.write_to_serial(response)
                 elif "G28" in gcode.capitalize():
                     # Auto Home
                     response = self.send_gcode_to_api(gcode)
-                    logging.debug("response: %s" % response)
                     self.write_to_serial(response)
                 elif "G1" in gcode.capitalize():
                     # Linear Move
@@ -508,6 +504,7 @@ class TFTAdapter:
                         self.write_to_serial("ok\n")
                     else:
                         # Get Feedrate Percentage
+                        self.query_status()
                         self.send_speed_factor()
                 elif "M221" in gcode.capitalize():
                     if "M221 S" in gcode.upper():
@@ -516,6 +513,7 @@ class TFTAdapter:
                         self.write_to_serial("ok\n")
                     else:
                         # Get Flow Percentage
+                        self.query_status()
                         self.send_extrude_factor()
                 else:
                     logging.warning("unknown command")
@@ -531,8 +529,6 @@ parser.add_argument('-u', '--moonraker_uri', help='moonraket api uri', default="
 parser.add_argument('-l', '--logfile', help='write log to file instead of stderr')
 parser.add_argument('-v', '--verbose', help='debug mode', action="store_true")
 args = parser.parse_args()
-
-handler = logging.FileHandler('my_log_info.log')
 
 logging.basicConfig(handlers = [
                             logging.FileHandler(args.logfile)
