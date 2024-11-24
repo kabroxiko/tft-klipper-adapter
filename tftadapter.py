@@ -64,7 +64,7 @@ class TFTAdapter:
         self.firmware_info = ""
 
         self.tft_serial = serial.Serial(args.tft_device, args.tft_baud)
-        self.autotemperature = "off"
+        self.auto_status = "off"
 
         self.lock = threading.Lock()
 
@@ -97,14 +97,6 @@ class TFTAdapter:
         else:
             logging.error("serial port is not open")
 
-    def _on_close(self, ws, close_status, close_msg):
-        logging.info("Reconnecting websocket")
-        time.sleep(10)
-        self.start_socket()
-
-    def _on_error(self, ws, error):
-        traceback.print_exc()
-
     def set_status(self, status):
         if 'heater_bed' in status:
             if "temperature" in status['heater_bed']:
@@ -132,29 +124,8 @@ class TFTAdapter:
         logging.debug("extrude_factor: %s" % self.extrude_factor)
 
     def start_socket(self):
-        self.query_status()
-        # self.auto_get_temperature()
+        self.auto_get_temperature()
         self.query_firmware_info()
-        # asyncio.run(self._listen_subscription())
-
-    # def websocket_send(self, query):
-    #     loop = asyncio.new_event_loop()
-    #     asyncio.set_event_loop(loop)
-    #     result = loop.run_until_complete(self.send_receive_message(self.ws_uri, query))
-    #     loop.close()
-    #     logging.debug("result: %s" % result)
-    #     return result
-
-    # def _unsubscribe_all(self):
-    #     data = {
-    #         "jsonrpc": "2.0",
-    #         "method": "printer.objects.subscribe",
-    #         "params": {
-    #             "objects": { },
-    #         },
-    #         "id": 4654
-    #     }
-    #     self.ws.send(json.dumps(data))
 
     def query_status(self):
         # Query Status
@@ -177,6 +148,8 @@ class TFTAdapter:
         self.set_status(status)
 
     def get_temperature(self):
+        if self.auto_status != "on":
+            self.query_status()
         message = self.temperature_tmpl.format(
             ETemp   = self.extruder['temperature'],
             ETarget = self.extruder['target'],
@@ -185,11 +158,12 @@ class TFTAdapter:
         )
         self.write_to_serial(message)
 
-    # def auto_get_temperature(self):
-    #     self.autotemperature = "on"
-    #     refresh_time = 3
-    #     threading.Timer(refresh_time, self.auto_get_temperature).start()
-    #     self.get_temperature()
+    def auto_get_temperature(self):
+        self.auto_status = "on"
+        refresh_time = 3
+        threading.Timer(refresh_time, self.auto_get_temperature).start()
+        self.query_status()
+        self.get_temperature()
 
     def get_firmware_info(self, software_version):
         message = "FIRMWARE_NAME:Klipper %s" % (software_version)
@@ -310,10 +284,14 @@ class TFTAdapter:
         self.write_to_serial(message)
 
     def send_speed_factor(self):
+        if self.auto_status != "on":
+            self.query_status()
         message = self.feed_rate_tmpl.format(fr=self.speed_factor*100)
         self.write_to_serial(message)
 
     def send_extrude_factor(self):
+        if self.auto_status != "on":
+            self.query_status()
         message = self.flow_rate_tmpl.format(er=self.extrude_factor*100)
         self.write_to_serial(message)
 
@@ -379,24 +357,6 @@ class TFTAdapter:
             self.tft_serial.close()
         logging.debug("Serial closed")
 
-    # async def _listen_subscription(self):
-    #     data = {
-    #         "jsonrpc": "2.0",
-    #         "method": "printer.objects.subscribe",
-    #         "params": {
-    #             "objects": {
-    #                 "extruder": None,
-    #                 "heater_bed": None,
-    #                 "gcode_move": None
-    #             }
-    #         },
-    #         "id": 5434
-    #     }
-    #     self.handler.command(data)
-
-    #     while True:
-    #         self._on_message()
-
     def start_serial(self):
         while True:
             try:
@@ -408,7 +368,6 @@ class TFTAdapter:
                     self.write_to_serial(response)
                 elif "M105" in gcode.capitalize():
                     # Report Temperatures
-                    self.query_status()
                     self.get_temperature()
                 elif "M92" in gcode.capitalize():
                     # Set Axis Steps-per-unit (not implemented)
@@ -430,8 +389,6 @@ class TFTAdapter:
                     self.query_report_settings()
                 elif "M155" in gcode.capitalize():
                     # Temperature Auto-Report
-                    # if self.autotemperature != "on":
-                    #     self.auto_get_temperature()
                     self.write_to_serial("ok\n")
                 elif "M115" in gcode.capitalize():
                     # Firmware Info
@@ -504,7 +461,6 @@ class TFTAdapter:
                         self.write_to_serial("ok\n")
                     else:
                         # Get Feedrate Percentage
-                        self.query_status()
                         self.send_speed_factor()
                 elif "M221" in gcode.capitalize():
                     if "M221 S" in gcode.upper():
@@ -513,7 +469,6 @@ class TFTAdapter:
                         self.write_to_serial("ok\n")
                     else:
                         # Get Flow Percentage
-                        self.query_status()
                         self.send_extrude_factor()
                 else:
                     logging.warning("unknown command")
