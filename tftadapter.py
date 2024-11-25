@@ -77,14 +77,13 @@ class TFTAdapter:
             "G91",  # Relative Positioning
             "G0",   # Linear Move
             "M24",  # Start or Resume SD print
-            "M25"   # Pause SD print
-            "M108"  # Break and Continue
+            "M25",  # Pause SD print
+            "M108", # Break and Continue
             "G28"   # Auto Home
         ]
 
         self.unknown_gcodes = [
             "T0",   # Select or Report Tool
-            "M701", # Load filament
             "M92",  # Set Axis Steps-per-unit (not implemented)
             "M211"  # Software Endstops
         ]
@@ -332,7 +331,7 @@ class TFTAdapter:
         for file in response:
             message = "%s%s %s\n" % (message, file["path"], file["size"])
         message = "%sEnd file list\n" % message
-        message = "%sok\n" % message
+        message = "%sok" % message
         end = time.time()
         logging.info("Response (%s): %s" % (end - start, message))
         return message
@@ -348,7 +347,7 @@ class TFTAdapter:
             "id": 3545
         }
         response = self.handler.command(query)
-        logging.info("Response: %s" % response)
+        logging.debug("Response: %s" % response)
         message = "File opened:%s Size:%s\n" % (response["filename"], response["size"])
         message = "%sFile selected\n" % message
         message = "%sok\n" % message
@@ -381,7 +380,7 @@ class TFTAdapter:
                     # Standard gcode
                     response = self.send_gcode_to_api(gcode)
                     self.write_to_serial(response)
-                if self.is_unknown_gcode(gcode):
+                elif self.is_unknown_gcode(gcode):
                     # Unknown gcode
                     logging.warning("Unknown gcode")
                     self.write_to_serial("ok\n")
@@ -422,7 +421,7 @@ class TFTAdapter:
                 elif "M33" in gcode.capitalize():
                     # Get Long Path
                     filename = gcode.split(" ")[1]
-                    self.write_to_serial("%s\n" % filename)
+                    self.write_to_serial("%s" % filename)
                 elif "M23" in gcode.capitalize():
                     # Select SD file
                     self.send_gcode_to_api(gcode)
