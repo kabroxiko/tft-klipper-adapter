@@ -75,7 +75,18 @@ class TFTAdapter:
             "M84",  # Disable steppers
             "G90",  # Absolute Positioning
             "G91",  # Relative Positioning
-            "G0"    # Linear Move
+            "G0",   # Linear Move
+            "M24",  # Start or Resume SD print
+            "M25"   # Pause SD print
+            "M108"  # Break and Continue
+            "G28"   # Auto Home
+        ]
+
+        self.unknown_gcodes = [
+            "T0",   # Select or Report Tool
+            "M701", # Load filament
+            "M92",  # Set Axis Steps-per-unit (not implemented)
+            "M211"  # Software Endstops
         ]
         atexit.register(self.exit_handler)
 
@@ -201,7 +212,24 @@ class TFTAdapter:
         response = self.handler.command(query)
         self.firmware_info = self.get_firmware_info(response["software_version"])
 
-    def get_report_settings(self, status):
+    def query_report_settings(self):
+        # Query Report Settings
+        id = 6726
+        query = {
+            "jsonrpc": "2.0",
+            "method": "printer.objects.query",
+            "params": {
+                "objects": {
+                    "configfile": ["settings"],
+                    "toolhead": None,
+                    "gcode_move": ["homing_origin"],
+                    "fan": ["speed"]
+                }
+            },
+            "id": id
+        }
+        response = self.handler.command(query)
+        status = response["status"]
         bltouch = None
         settings = status["configfile"]["settings"]
         toolhead = status["toolhead"]
@@ -252,27 +280,8 @@ class TFTAdapter:
         # Fan Speed
         message = "%sM106 S%s\n" % (message, status["fan"]["speed"])
         logging.info("message: %s" % message)
-        return message
 
-    def query_report_settings(self):
-        # Query Report Settings
-        id = 6726
-        query = {
-            "jsonrpc": "2.0",
-            "method": "printer.objects.query",
-            "params": {
-                "objects": {
-                    "configfile": ["settings"],
-                    "toolhead": None,
-                    "gcode_move": ["homing_origin"],
-                    "fan": ["speed"]
-                }
-            },
-            "id": id
-        }
-        response = self.handler.command(query)
-        report_settings = self.get_report_settings(response["status"])
-        self.write_to_serial(report_settings)
+        self.write_to_serial(message)
 
     def send_current_position(self):
         message = self.position_tmpl.format(
@@ -352,6 +361,12 @@ class TFTAdapter:
                 return True
         return False
 
+    def is_unknown_gcode(self, gcode):
+        for g in self.unknown_gcodes:
+            if g in gcode.capitalize():
+                return True
+        return False
+
     def exit_handler(self):
         if self.tft_serial.is_open:
             self.tft_serial.close()
@@ -363,32 +378,32 @@ class TFTAdapter:
                 gcode = self.tft_serial.readline().decode("utf-8")
                 logging.info("gcode: %s" % gcode.replace('\n',''))
                 if self.is_standard_gcode(gcode):
-                    # Standard Mxxx gcode
+                    # Standard gcode
                     response = self.send_gcode_to_api(gcode)
                     self.write_to_serial(response)
+                if self.is_unknown_gcode(gcode):
+                    # Unknown gcode
+                    logging.warning("Unknown gcode")
+                    self.write_to_serial("ok\n")
                 elif "M105" in gcode.capitalize():
                     # Report Temperatures
                     self.get_temperature()
-                elif "M92" in gcode.capitalize():
-                    # Set Axis Steps-per-unit (not implemented)
-                    self.write_to_serial("ok\n")
-                elif "M82" in gcode.capitalize():
-                    # E Absolute
-                    pass
-                elif "M211" in gcode.capitalize():
-                    # Software Endstops
-                    self.write_to_serial("ok\n")
-                elif "M154" in gcode.capitalize():
-                    # Position Auto-Report
-                    pass
-                elif "M420" in gcode.capitalize():
-                    # Bed Leveling State
-                    pass
+                # elif "M82" in gcode.capitalize():
+                #     # E Absolute
+                #     pass
+                # elif "M154" in gcode.capitalize():
+                #     # Position Auto-Report
+                #     pass
+                # elif "M420" in gcode.capitalize():
+                #     # Bed Leveling State
+                    # pass
                 elif "M503" in gcode.capitalize():
                     # Report Settings
                     self.query_report_settings()
                 elif "M155" in gcode.capitalize():
                     # Temperature Auto-Report
+                    if self.auto_status != "on":
+                        self.auto_get_temperature()
                     self.write_to_serial("ok\n")
                 elif "M115" in gcode.capitalize():
                     # Firmware Info
@@ -419,14 +434,6 @@ class TFTAdapter:
                     # TODO: agregar manejo de M27 S3
                     response = self.send_gcode_to_api(gcode)
                     self.write_to_serial(response)
-                elif "M24" in gcode.capitalize():
-                    # Start or Resume SD print
-                    response = self.send_gcode_to_api(gcode)
-                    self.write_to_serial(response)
-                elif "M25" in gcode.capitalize():
-                    # Pause SD print
-                    response = self.send_gcode_to_api(gcode)
-                    self.write_to_serial(response)
                 elif "M524" in gcode.capitalize():
                     # Abort SD print
                     response = self.send_gcode_to_api("CANCEL_PRINT")
@@ -436,15 +443,6 @@ class TFTAdapter:
                     # message = gcode.split(" ", 1)[1]
                     # if message == "P0 A1 action:cancel":
                     #     response = self.send_gcode_to_api("CANCEL_PRINT")
-                    response = self.send_gcode_to_api(gcode)
-                    self.write_to_serial(response)
-                elif "M108" in gcode.capitalize():
-                    # Break and Continue
-                    # Ignore
-                    response = self.send_gcode_to_api(gcode)
-                    self.write_to_serial(response)
-                elif "G28" in gcode.capitalize():
-                    # Auto Home
                     response = self.send_gcode_to_api(gcode)
                     self.write_to_serial(response)
                 elif "G1" in gcode.capitalize():
@@ -471,7 +469,10 @@ class TFTAdapter:
                         # Get Flow Percentage
                         self.send_extrude_factor()
                 else:
-                    logging.warning("unknown command")
+                    response = self.send_gcode_to_api(gcode)
+                    if response != "ok":
+                        logging.warning("Unregistered gcode")
+                    self.write_to_serial(response)
             except Exception as ex:
                 # traceback.print_exc()
                 logging.error("Serial Error: %s" % ex)
