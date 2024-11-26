@@ -65,7 +65,7 @@ class Serial:
             try:
                 for data in message.splitlines():
                     logging.info("message: %s" % data)
-                self.tft_serial.write(bytes(message, encoding='utf-8'))
+                self.tft_serial.write(bytes("%s\n" % message, encoding='utf-8'))
             finally:
                 self.lock.release()
         else:
@@ -74,17 +74,16 @@ class Serial:
 
 class TFTAdapter:
     def __init__(self):
-        self.websocket = Websocket()
         self.heater_bed = {"temperature": 0, "target": 0}
         self.extruder = {"temperature": 0, "target": 0}
         self.gcode_position = [0, 0, 0, 0]
         self.extrude_factor = 0
         self.speed_factor = 0
 
-        self.temperature_tmpl = "ok T:{ETemp:.2f} /{ETarget:.2f} B:{BTemp:.2f} /{BTarget:.2f} @:0 B@:0\n"
-        self.position_tmpl = "X:{x:.2f} Y:{y:.2f} Z:{z:.2f} E:{e:.2f} \nok\n"
-        self.feed_rate_tmpl = "FR:{fr:}%\nok\n"
-        self.flow_rate_tmpl = "E0 Flow: {er:}%\nok\n"
+        self.temperature_tmpl = "ok T:{ETemp:.2f} /{ETarget:.2f} B:{BTemp:.2f} /{BTarget:.2f} @:0 B@:0"
+        self.position_tmpl = "X:{x:.2f} Y:{y:.2f} Z:{z:.2f} E:{e:.2f} \nok"
+        self.feed_rate_tmpl = "FR:{fr:}%\nok"
+        self.flow_rate_tmpl = "E0 Flow: {er:}%\nok"
         self.firmware_info = ""
 
         self.auto_status = "off"
@@ -103,17 +102,17 @@ class TFTAdapter:
             "G28"   # Auto Home
         ]
 
-        self.unknown_gcodes = [
+        self.unimplemented_gcodes = [
             "T0",   # Select or Report Tool
             "M92",  # Set Axis Steps-per-unit (not implemented)
-            "M211"  # Software Endstops
         ]
         self.serial = Serial()
+        self.websocket = Websocket()
 
         #
         #create and start threads
         #
-        threading.Thread(target=self.start_serial).start()
+        threading.Thread(target=self.tft_listening).start()
 
     def set_status(self, status):
         if 'heater_bed' in status:
@@ -209,7 +208,7 @@ class TFTAdapter:
         message = "%sCap:LONG_FILENAME:1\n" % (message)
         message = "%sCap:BABYSTEPPING:1\n" % (message)
         message = "%sCap:BUILD_PERCENT:1\n" % (message)  # M73 support
-        message = "%sCap:CHAMBER_TEMPERATURE:0\n" % (message)
+        message = "%sCap:CHAMBER_TEMPERATURE:0" % (message)
         self.serial.write_to_serial(message)
 
     def query_report_settings(self):
@@ -238,14 +237,14 @@ class TFTAdapter:
         printer = settings["printer"]
         bltouch = settings["bltouch"]
         # Max feedrates (units/s):
-        message = "M203 X%s Y%s Z%s E%s\n" % (
+        message = "M203 X%s Y%s Z%s E%s" % (
             toolhead["max_velocity"],
             toolhead["max_velocity"],
             printer["max_z_velocity"],
             extruder["max_extrude_only_velocity"]
         )
         # Max Acceleration (units/s2):
-        message = "%sM201 X%s Y%s Z%s E%s\n" % (
+        message = "%sM201 X%s Y%s Z%s E%s" % (
             message,
             toolhead["max_accel"],
             toolhead["max_accel"],
@@ -253,7 +252,7 @@ class TFTAdapter:
             extruder["max_extrude_only_accel"]
         )
         # Home offset
-        message = "%sM206 X%s Y%s Z%s\n" % (
+        message = "%sM206 X%s Y%s Z%s" % (
             message,
             gcode_move["homing_origin"][0],
             gcode_move["homing_origin"][1],
@@ -261,7 +260,7 @@ class TFTAdapter:
         )
         # Z-Probe Offset
         if bltouch is not None:
-            message = "%sM851 X%s Y%s Z%s\n" % (
+            message = "%sM851 X%s Y%s Z%s" % (
                 message,
                 bltouch["x_offset"],
                 bltouch["y_offset"],
@@ -269,7 +268,7 @@ class TFTAdapter:
             )
         # TODO: Respuesta en caso de no tener bltouch
         # else:
-        #     message = "%sM851 X%s Y%s Z%s\n" % (
+        #     message = "%sM851 X%s Y%s Z%s" % (
         #         message,
         #         probe["x_offset"],
         #         probe["y_offset"],
@@ -278,7 +277,7 @@ class TFTAdapter:
         # Auto Bed Leveling
         message = "%sM420 S1 Z%s\n" % (message, settings["bed_mesh"]["fade_end"])
         # Fan Speed
-        message = "%sM106 S%s\n" % (message, status["fan"]["speed"])
+        message = "%sM106 S%s" % (message, status["fan"]["speed"])
         logging.info("message: %s" % message)
 
         self.serial.write_to_serial(message)
@@ -314,7 +313,7 @@ class TFTAdapter:
             "id": 4758
         }
         response = self.websocket.command(query)
-        logging.info("Response to gcode %s: %s" % (gcode.replace('\n',''), response))
+        logging.info("Response to gcode %s: %s" % (gcode, response))
         return response
 
     def get_sd_files(self):
@@ -351,7 +350,7 @@ class TFTAdapter:
         logging.debug("Response: %s" % response)
         message = "File opened:%s Size:%s\n" % (response["filename"], response["size"])
         message = "%sFile selected\n" % message
-        message = "%sok\n" % message
+        message = "%sok" % message
         logging.info("Response: %s" % message)
         return message
 
@@ -361,28 +360,31 @@ class TFTAdapter:
                 return True
         return False
 
-    def is_unknown_gcode(self, gcode):
-        for g in self.unknown_gcodes:
+    def is_unimplemented_gcode(self, gcode):
+        for g in self.unimplemented_gcodes:
             if g in gcode.capitalize():
                 return True
         return False
 
-    def start_serial(self):
+    def tft_listening(self):
         while True:
             try:
-                gcode = self.serial.tft_serial.readline().decode("utf-8")
-                logging.info("gcode: %s" % gcode.replace('\n',''))
+                gcode = self.serial.tft_serial.readline().decode("utf-8").replace('\n','')
+                logging.info("gcode: %s" % gcode)
                 if self.is_standard_gcode(gcode):
                     # Standard gcode
                     response = self.send_gcode_to_api(gcode)
                     self.serial.write_to_serial(response)
-                elif self.is_unknown_gcode(gcode):
-                    # Unknown gcode
-                    logging.warning("Unknown gcode")
-                    self.serial.write_to_serial("ok\n")
+                elif self.is_unimplemented_gcode(gcode):
+                    # Unimplemented gcode
+                    logging.warning("Unimplemented gcode")
+                    self.serial.write_to_serial("ok")
                 elif "M105" in gcode.capitalize():
                     # Report Temperatures
                     self.get_temperature()
+                elif "M211" in gcode.capitalize():
+                    # Software Endstops
+                    self.serial.write_to_serial("ON")
                 # elif "M82" in gcode.capitalize():
                 #     # E Absolute
                 #     pass
@@ -399,7 +401,7 @@ class TFTAdapter:
                     # Temperature Auto-Report
                     if self.auto_status != "on":
                         self.auto_get_temperature()
-                    self.serial.write_to_serial("ok\n")
+                    self.serial.write_to_serial("ok")
                 elif "M115" in gcode.capitalize():
                     # Firmware Info
                     self.query_firmware_info()
@@ -409,7 +411,7 @@ class TFTAdapter:
                 elif "M21" in gcode.capitalize():
                     # Init SD card
                     self.send_gcode_to_api(gcode)
-                    self.serial.write_to_serial("SD card ok\n")
+                    self.serial.write_to_serial("SD card ok")
                 elif "M20" in gcode.upper():
                     # List SD Card
                     response = self.get_sd_files()
@@ -445,13 +447,13 @@ class TFTAdapter:
                     self.send_gcode_to_api("G91")
                     self.send_gcode_to_api(gcode)
                     self.send_gcode_to_api("G90")
-                    self.serial.write_to_serial("ok\n")
+                    self.serial.write_to_serial("ok")
                     # self.serial.write_to_serial(self.send_current_position())
                 elif "M220" in gcode.capitalize():
                     if "M220 S" in gcode.upper():
                         # Set Feedrate Percentage
                         self.send_gcode_to_api(gcode)
-                        self.serial.write_to_serial("ok\n")
+                        self.serial.write_to_serial("ok")
                     else:
                         # Get Feedrate Percentage
                         self.send_speed_factor()
@@ -459,14 +461,14 @@ class TFTAdapter:
                     if "M221 S" in gcode.upper():
                         # Set Flow Percentage
                         self.send_gcode_to_api(gcode)
-                        self.serial.write_to_serial("ok\n")
+                        self.serial.write_to_serial("ok")
                     else:
                         # Get Flow Percentage
                         self.send_extrude_factor()
                 else:
                     response = self.send_gcode_to_api(gcode)
                     if response != "ok":
-                        logging.warning("Unregistered gcode")
+                        logging.warning("Unknown gcode")
                     self.serial.write_to_serial(response)
             except Exception as ex:
                 # traceback.print_exc()
