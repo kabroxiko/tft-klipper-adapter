@@ -48,6 +48,23 @@ class Websocket:
         logging.debug("result: %s" % result)
         return result
 
+class Serial:
+    def __init__(self):
+        atexit.register(self.exit_handler)
+
+    def write_to_serial(self, message):
+        if self.tft_serial.is_open:
+            self.lock.acquire()
+            try:
+                for data in message.splitlines():
+                    logging.info("message: %s" % data)
+                self.tft_serial.write(bytes(message, encoding='utf-8'))
+            finally:
+                self.lock.release()
+        else:
+            logging.error("serial port is not open")
+
+
 class TFTAdapter:
     def __init__(self):
         self.websocket = Websocket()
@@ -87,24 +104,12 @@ class TFTAdapter:
             "M92",  # Set Axis Steps-per-unit (not implemented)
             "M211"  # Software Endstops
         ]
-        atexit.register(self.exit_handler)
+        serial = Serial()
 
         #
         #create and start threads
         #
         threading.Thread(target=self.start_serial).start()
-
-    def write_to_serial(self, message):
-        if self.tft_serial.is_open:
-            self.lock.acquire()
-            try:
-                for data in message.splitlines():
-                    logging.info("message: %s" % data)
-                self.tft_serial.write(bytes(message, encoding='utf-8'))
-            finally:
-                self.lock.release()
-        else:
-            logging.error("serial port is not open")
 
     def set_status(self, status):
         if 'heater_bed' in status:
