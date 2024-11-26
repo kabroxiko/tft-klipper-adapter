@@ -92,7 +92,7 @@ class TFTAdapter:
         #
         #create and start threads
         #
-        threading.Thread(target=self.start_socket).start()
+        # threading.Thread(target=self.start_socket).start()
         threading.Thread(target=self.start_serial).start()
 
     def write_to_serial(self, message):
@@ -133,10 +133,6 @@ class TFTAdapter:
         logging.debug("speed_factor: %s" % self.speed_factor)
         logging.debug("extrude_factor: %s" % self.extrude_factor)
 
-    def start_socket(self):
-        self.auto_get_temperature()
-        self.query_firmware_info()
-
     def query_status(self):
         # Query Status
         query = {
@@ -175,8 +171,16 @@ class TFTAdapter:
         self.query_status()
         self.get_temperature()
 
-    def get_firmware_info(self, software_version):
-        message = "FIRMWARE_NAME:Klipper %s" % (software_version)
+    def query_firmware_info(self):
+        # Query firmware Info
+        id = 5153
+        query = {
+            "jsonrpc": "2.0",
+            "method": "printer.info",
+            "id": id
+        }
+        response = self.websocket.command(query)
+        message = "FIRMWARE_NAME:Klipper %s" % (response["software_version"])
         message = "%s SOURCE_CODE_URL:https://github.com/Klipper3d/klipper" % (message)
         message = "%s PROTOCOL_VERSION:1.0" % (message)
         message = "%s MACHINE_TYPE:Artillery Genius Pro\n" % (message)
@@ -198,18 +202,7 @@ class TFTAdapter:
         message = "%sCap:BABYSTEPPING:1\n" % (message)
         message = "%sCap:BUILD_PERCENT:1\n" % (message)  # M73 support
         message = "%sCap:CHAMBER_TEMPERATURE:0\n" % (message)
-        return message
-
-    def query_firmware_info(self):
-        # Query firmware Info
-        id = 5153
-        query = {
-            "jsonrpc": "2.0",
-            "method": "printer.info",
-            "id": id
-        }
-        response = self.websocket.command(query)
-        self.firmware_info = self.get_firmware_info(response["software_version"])
+        self.write_to_serial(message)
 
     def query_report_settings(self):
         # Query Report Settings
@@ -406,7 +399,7 @@ class TFTAdapter:
                     self.write_to_serial("ok\n")
                 elif "M115" in gcode.capitalize():
                     # Firmware Info
-                    self.write_to_serial(self.firmware_info)
+                    self.query_firmware_info()
                 elif "M114" in gcode.capitalize():
                     # Get Current Position:
                     self.send_current_position()
