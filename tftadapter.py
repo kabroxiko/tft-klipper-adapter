@@ -50,7 +50,14 @@ class Websocket:
 
 class Serial:
     def __init__(self):
+        self.lock = threading.Lock()
+        self.tft_serial = serial.Serial(args.tft_device, args.tft_baud)
         atexit.register(self.exit_handler)
+
+    def exit_handler(self):
+        if self.tft_serial.is_open:
+            self.tft_serial.close()
+        logging.debug("Serial closed")
 
     def write_to_serial(self, message):
         if self.tft_serial.is_open:
@@ -80,10 +87,7 @@ class TFTAdapter:
         self.flow_rate_tmpl = "E0 Flow: {er:}%\nok\n"
         self.firmware_info = ""
 
-        self.tft_serial = serial.Serial(args.tft_device, args.tft_baud)
         self.auto_status = "off"
-
-        self.lock = threading.Lock()
 
         self.standard_gcodes = [
             "M104", # Set Hotend Temperature
@@ -104,7 +108,7 @@ class TFTAdapter:
             "M92",  # Set Axis Steps-per-unit (not implemented)
             "M211"  # Software Endstops
         ]
-        serial = Serial()
+        self.serial = Serial()
 
         #
         #create and start threads
@@ -166,7 +170,7 @@ class TFTAdapter:
             BTemp   = self.heater_bed['temperature'],
             BTarget = self.heater_bed['target']
         )
-        self.write_to_serial(message)
+        self.serial.write_to_serial(message)
 
     def auto_get_temperature(self):
         self.auto_status = "on"
@@ -206,7 +210,7 @@ class TFTAdapter:
         message = "%sCap:BABYSTEPPING:1\n" % (message)
         message = "%sCap:BUILD_PERCENT:1\n" % (message)  # M73 support
         message = "%sCap:CHAMBER_TEMPERATURE:0\n" % (message)
-        self.write_to_serial(message)
+        self.serial.write_to_serial(message)
 
     def query_report_settings(self):
         # Query Report Settings
@@ -277,7 +281,7 @@ class TFTAdapter:
         message = "%sM106 S%s\n" % (message, status["fan"]["speed"])
         logging.info("message: %s" % message)
 
-        self.write_to_serial(message)
+        self.serial.write_to_serial(message)
 
     def send_current_position(self):
         message = self.position_tmpl.format(
@@ -286,19 +290,19 @@ class TFTAdapter:
             z=self.gcode_position[2],
             e=self.gcode_position[3]
         )
-        self.write_to_serial(message)
+        self.serial.write_to_serial(message)
 
     def send_speed_factor(self):
         if self.auto_status != "on":
             self.query_status()
         message = self.feed_rate_tmpl.format(fr=self.speed_factor*100)
-        self.write_to_serial(message)
+        self.serial.write_to_serial(message)
 
     def send_extrude_factor(self):
         if self.auto_status != "on":
             self.query_status()
         message = self.flow_rate_tmpl.format(er=self.extrude_factor*100)
-        self.write_to_serial(message)
+        self.serial.write_to_serial(message)
 
     def send_gcode_to_api(self, gcode):
         query = {
@@ -363,24 +367,19 @@ class TFTAdapter:
                 return True
         return False
 
-    def exit_handler(self):
-        if self.tft_serial.is_open:
-            self.tft_serial.close()
-        logging.debug("Serial closed")
-
     def start_serial(self):
         while True:
             try:
-                gcode = self.tft_serial.readline().decode("utf-8")
+                gcode = self.serial.tft_serial.readline().decode("utf-8")
                 logging.info("gcode: %s" % gcode.replace('\n',''))
                 if self.is_standard_gcode(gcode):
                     # Standard gcode
                     response = self.send_gcode_to_api(gcode)
-                    self.write_to_serial(response)
+                    self.serial.write_to_serial(response)
                 elif self.is_unknown_gcode(gcode):
                     # Unknown gcode
                     logging.warning("Unknown gcode")
-                    self.write_to_serial("ok\n")
+                    self.serial.write_to_serial("ok\n")
                 elif "M105" in gcode.capitalize():
                     # Report Temperatures
                     self.get_temperature()
@@ -400,7 +399,7 @@ class TFTAdapter:
                     # Temperature Auto-Report
                     if self.auto_status != "on":
                         self.auto_get_temperature()
-                    self.write_to_serial("ok\n")
+                    self.serial.write_to_serial("ok\n")
                 elif "M115" in gcode.capitalize():
                     # Firmware Info
                     self.query_firmware_info()
@@ -410,49 +409,49 @@ class TFTAdapter:
                 elif "M21" in gcode.capitalize():
                     # Init SD card
                     self.send_gcode_to_api(gcode)
-                    self.write_to_serial("SD card ok\n")
+                    self.serial.write_to_serial("SD card ok\n")
                 elif "M20" in gcode.upper():
                     # List SD Card
                     response = self.get_sd_files()
-                    self.write_to_serial(response)
+                    self.serial.write_to_serial(response)
                 elif "M33" in gcode.capitalize():
                     # Get Long Path
                     filename = gcode.split(" ")[1]
-                    self.write_to_serial("%s" % filename)
+                    self.serial.write_to_serial("%s" % filename)
                 elif "M23" in gcode.capitalize():
                     # Select SD file
                     self.send_gcode_to_api(gcode)
                     filename = gcode.split("/")[1]
                     response = self.get_file_metadata(filename.replace('\n',''))
-                    self.write_to_serial(response)
+                    self.serial.write_to_serial(response)
                 elif "M27" in gcode.capitalize():
                     # Report SD print status
                     # TODO: agregar manejo de M27 S3
                     response = self.send_gcode_to_api(gcode)
-                    self.write_to_serial(response)
+                    self.serial.write_to_serial(response)
                 elif "M524" in gcode.capitalize():
                     # Abort SD print
                     response = self.send_gcode_to_api("CANCEL_PRINT")
-                    self.write_to_serial(response)
+                    self.serial.write_to_serial(response)
                 elif "M118" in gcode.capitalize():
                     # Serial print
                     # message = gcode.split(" ", 1)[1]
                     # if message == "P0 A1 action:cancel":
                     #     response = self.send_gcode_to_api("CANCEL_PRINT")
                     response = self.send_gcode_to_api(gcode)
-                    self.write_to_serial(response)
+                    self.serial.write_to_serial(response)
                 elif "G1" in gcode.capitalize():
                     # Linear Move
                     self.send_gcode_to_api("G91")
                     self.send_gcode_to_api(gcode)
                     self.send_gcode_to_api("G90")
-                    self.write_to_serial("ok\n")
-                    # self.write_to_serial(self.send_current_position())
+                    self.serial.write_to_serial("ok\n")
+                    # self.serial.write_to_serial(self.send_current_position())
                 elif "M220" in gcode.capitalize():
                     if "M220 S" in gcode.upper():
                         # Set Feedrate Percentage
                         self.send_gcode_to_api(gcode)
-                        self.write_to_serial("ok\n")
+                        self.serial.write_to_serial("ok\n")
                     else:
                         # Get Feedrate Percentage
                         self.send_speed_factor()
@@ -460,7 +459,7 @@ class TFTAdapter:
                     if "M221 S" in gcode.upper():
                         # Set Flow Percentage
                         self.send_gcode_to_api(gcode)
-                        self.write_to_serial("ok\n")
+                        self.serial.write_to_serial("ok\n")
                     else:
                         # Get Flow Percentage
                         self.send_extrude_factor()
@@ -468,7 +467,7 @@ class TFTAdapter:
                     response = self.send_gcode_to_api(gcode)
                     if response != "ok":
                         logging.warning("Unregistered gcode")
-                    self.write_to_serial(response)
+                    self.serial.write_to_serial(response)
             except Exception as ex:
                 # traceback.print_exc()
                 logging.error("Serial Error: %s" % ex)
