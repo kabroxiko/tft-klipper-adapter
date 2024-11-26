@@ -12,7 +12,7 @@ import serial
 import traceback
 import argparse
 
-class Handler:
+class Websocket:
     def __init__(self):
         self.ws = None
         self.ws_uri = "%s/websocket?token=" % (args.moonraker_uri)
@@ -50,7 +50,7 @@ class Handler:
 
 class TFTAdapter:
     def __init__(self):
-        self.handler = Handler()
+        self.websocket = Websocket()
         self.heater_bed = {"temperature": 0, "target": 0}
         self.extruder = {"temperature": 0, "target": 0}
         self.gcode_position = [0, 0, 0, 0]
@@ -151,7 +151,7 @@ class TFTAdapter:
             },
             "id": 1234
         }
-        response = self.handler.command(query)
+        response = self.websocket.command(query)
         status = response["status"]
         logging.debug("status: %s" % status)
 
@@ -208,7 +208,7 @@ class TFTAdapter:
             "method": "printer.info",
             "id": id
         }
-        response = self.handler.command(query)
+        response = self.websocket.command(query)
         self.firmware_info = self.get_firmware_info(response["software_version"])
 
     def query_report_settings(self):
@@ -227,7 +227,7 @@ class TFTAdapter:
             },
             "id": id
         }
-        response = self.handler.command(query)
+        response = self.websocket.command(query)
         status = response["status"]
         bltouch = None
         settings = status["configfile"]["settings"]
@@ -312,7 +312,7 @@ class TFTAdapter:
             },
             "id": 4758
         }
-        response = self.handler.command(query)
+        response = self.websocket.command(query)
         logging.info("Response to gcode %s: %s" % (gcode.replace('\n',''), response))
         return response
 
@@ -326,7 +326,7 @@ class TFTAdapter:
             },
             "id": 4644
         }
-        response = self.handler.command(query)
+        response = self.websocket.command(query)
         message = "Begin file list\n"
         for file in response:
             message = "%s%s %s\n" % (message, file["path"], file["size"])
@@ -346,7 +346,7 @@ class TFTAdapter:
             },
             "id": 3545
         }
-        response = self.handler.command(query)
+        response = self.websocket.command(query)
         logging.debug("Response: %s" % response)
         message = "File opened:%s Size:%s\n" % (response["filename"], response["size"])
         message = "%sFile selected\n" % message
