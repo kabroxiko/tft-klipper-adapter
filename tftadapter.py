@@ -92,7 +92,6 @@ class TFTAdapter:
         #
         #create and start threads
         #
-        # threading.Thread(target=self.start_socket).start()
         threading.Thread(target=self.start_serial).start()
 
     def write_to_serial(self, message):
