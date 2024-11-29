@@ -6,7 +6,7 @@ import threading
 import logging
 import socket
 import errno
-from websockets import connect
+from websockets.asyncio.client import connect
 import asyncio
 import serial
 import traceback
@@ -16,7 +16,8 @@ class Websocket:
     def __init__(self):
         self.ws = None
         self.ws_uri = "%s/websocket?token=" % (args.moonraker_uri)
-        self.loop = asyncio.get_event_loop()
+        self.loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(self.loop)
         # perform a synchronous connect
         self.loop.run_until_complete(self.__async__connect())
 
@@ -47,6 +48,19 @@ class Websocket:
 
         logging.debug("result: %s" % result)
         return result
+
+    def listen(self):
+        response = self.loop.run_until_complete(self.__async__listen())[0]
+        logging.debug("response: %s" % response)
+        return response
+
+    async def __async__listen(self):
+        message = {}
+        while message.get('method', None) != "notify_status_update":
+            message = json.loads(await self.ws.recv(10.))
+        params = message.get("params")
+        logging.debug("message: %s" % params)
+        return params
 
 class Serial:
     def __init__(self):
@@ -86,7 +100,8 @@ class TFTAdapter:
         self.flow_rate_tmpl = "E0 Flow: {er:}%\nok"
         self.firmware_info = ""
 
-        self.auto_status = "off"
+        self.auto_report_teperature = "off"
+        self.auto_report_position = "off"
 
         self.standard_gcodes = [
             "M104", # Set Hotend Temperature
@@ -108,11 +123,31 @@ class TFTAdapter:
         ]
         self.serial = Serial()
         self.websocket = Websocket()
+        self.websocket2 = Websocket()
+        self.subscribe()
 
         #
         #create and start threads
         #
+        threading.Thread(target=self.ws_listening).start()
         threading.Thread(target=self.tft_listening).start()
+
+    def subscribe(self):
+        # Query Status
+        query = {
+            "jsonrpc": "2.0",
+            "method": "printer.objects.subscribe",
+            "params": {
+                "objects": {
+                    "extruder": None,
+                    "heater_bed": None,
+                    "gcode_move": None
+                }
+            },
+            "id": 5434
+        }
+        response = self.websocket2.command(query)
+        logging.debug("subscribe: %s" % response)
 
     def set_status(self, status):
         if 'heater_bed' in status:
@@ -140,6 +175,14 @@ class TFTAdapter:
         logging.debug("speed_factor: %s" % self.speed_factor)
         logging.debug("extrude_factor: %s" % self.extrude_factor)
 
+    def ws_listening(self):
+        self.auto_get_temperature()
+        self.auto_get_position()
+        while True:
+            status = self.websocket2.listen()
+            logging.debug("status: %s" % status)
+            self.set_status(status)
+
     def query_status(self):
         # Query Status
         query = {
@@ -158,10 +201,25 @@ class TFTAdapter:
         status = response["status"]
         logging.debug("status: %s" % status)
 
-        self.set_status(status)
+    def get_position(self):
+        if self.auto_report_position != "on":
+            self.query_status()
+        message = self.position_tmpl.format(
+            x=self.gcode_position[0],
+            y=self.gcode_position[1],
+            z=self.gcode_position[2],
+            e=self.gcode_position[3]
+        )
+        self.serial.write_to_serial(message)
+
+    def auto_get_position(self):
+        self.auto_report_position = "on"
+        refresh_time = 3
+        threading.Timer(refresh_time, self.auto_get_position).start()
+        self.get_position()
 
     def get_temperature(self):
-        if self.auto_status != "on":
+        if self.auto_report_teperature != "on":
             self.query_status()
         message = self.temperature_tmpl.format(
             ETemp   = self.extruder['temperature'],
@@ -172,10 +230,9 @@ class TFTAdapter:
         self.serial.write_to_serial(message)
 
     def auto_get_temperature(self):
-        self.auto_status = "on"
+        self.auto_report_teperature = "on"
         refresh_time = 3
         threading.Timer(refresh_time, self.auto_get_temperature).start()
-        self.query_status()
         self.get_temperature()
 
     def query_firmware_info(self):
@@ -282,23 +339,14 @@ class TFTAdapter:
 
         self.serial.write_to_serial(message)
 
-    def send_current_position(self):
-        message = self.position_tmpl.format(
-            x=self.gcode_position[0],
-            y=self.gcode_position[1],
-            z=self.gcode_position[2],
-            e=self.gcode_position[3]
-        )
-        self.serial.write_to_serial(message)
-
     def send_speed_factor(self):
-        if self.auto_status != "on":
+        if self.auto_report_position != "on":
             self.query_status()
         message = self.feed_rate_tmpl.format(fr=self.speed_factor*100)
         self.serial.write_to_serial(message)
 
     def send_extrude_factor(self):
-        if self.auto_status != "on":
+        if self.auto_report_position != "on":
             self.query_status()
         message = self.flow_rate_tmpl.format(er=self.extrude_factor*100)
         self.serial.write_to_serial(message)
@@ -388,9 +436,12 @@ class TFTAdapter:
                 # elif "M82" in gcode.capitalize():
                 #     # E Absolute
                 #     pass
-                # elif "M154" in gcode.capitalize():
-                #     # Position Auto-Report
-                #     pass
+                elif "M154" in gcode.capitalize():
+                    # Position Auto-Report
+                    # Temperature Auto-Report
+                    if self.auto_report_position != "on":
+                        self.auto_get_position()
+                    self.serial.write_to_serial("ok")
                 # elif "M420" in gcode.capitalize():
                 #     # Bed Leveling State
                     # pass
@@ -399,7 +450,7 @@ class TFTAdapter:
                     self.query_report_settings()
                 elif "M155" in gcode.capitalize():
                     # Temperature Auto-Report
-                    if self.auto_status != "on":
+                    if self.auto_report_teperature != "on":
                         self.auto_get_temperature()
                     self.serial.write_to_serial("ok")
                 elif "M115" in gcode.capitalize():
@@ -407,7 +458,7 @@ class TFTAdapter:
                     self.query_firmware_info()
                 elif "M114" in gcode.capitalize():
                     # Get Current Position:
-                    self.send_current_position()
+                    self.get_position()
                 elif "M21" in gcode.capitalize():
                     # Init SD card
                     self.send_gcode_to_api(gcode)
@@ -448,7 +499,7 @@ class TFTAdapter:
                     self.send_gcode_to_api(gcode)
                     self.send_gcode_to_api("G90")
                     self.serial.write_to_serial("ok")
-                    # self.serial.write_to_serial(self.send_current_position())
+                    # self.serial.write_to_serial(self.get_position())
                 elif "M220" in gcode.capitalize():
                     if "M220 S" in gcode.upper():
                         # Set Feedrate Percentage
@@ -471,7 +522,7 @@ class TFTAdapter:
                         logging.warning("Unknown gcode")
                     self.serial.write_to_serial(response)
             except Exception as ex:
-                # traceback.print_exc()
+                traceback.print_exc()
                 logging.error("Serial Error: %s" % ex)
 
 
