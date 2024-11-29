@@ -100,9 +100,6 @@ class TFTAdapter:
         self.flow_rate_tmpl = "E0 Flow: {er:}%\nok"
         self.firmware_info = ""
 
-        self.auto_report_teperature = "off"
-        self.auto_report_position = "off"
-
         self.standard_gcodes = [
             "M104", # Set Hotend Temperature
             "M140", # Set Bed Temperature
@@ -121,6 +118,10 @@ class TFTAdapter:
             "T0",   # Select or Report Tool
             "M92",  # Set Axis Steps-per-unit (not implemented)
         ]
+
+        self.auto_report_temperature = "off"
+        self.auto_report_position = "off"
+
         self.serial = Serial()
         self.websocket = Websocket()
         self.websocket2 = Websocket()
@@ -219,7 +220,7 @@ class TFTAdapter:
         self.get_position()
 
     def get_temperature(self):
-        if self.auto_report_teperature != "on":
+        if self.auto_report_temperature != "on":
             self.query_status()
         message = self.temperature_tmpl.format(
             ETemp   = self.extruder['temperature'],
@@ -230,7 +231,7 @@ class TFTAdapter:
         self.serial.write_to_serial(message)
 
     def auto_get_temperature(self):
-        self.auto_report_teperature = "on"
+        self.auto_report_temperature = "on"
         refresh_time = 3
         threading.Timer(refresh_time, self.auto_get_temperature).start()
         self.get_temperature()
@@ -450,7 +451,7 @@ class TFTAdapter:
                     self.query_report_settings()
                 elif "M155" in gcode.capitalize():
                     # Temperature Auto-Report
-                    if self.auto_report_teperature != "on":
+                    if self.auto_report_temperature != "on":
                         self.auto_get_temperature()
                     self.serial.write_to_serial("ok")
                 elif "M115" in gcode.capitalize():
