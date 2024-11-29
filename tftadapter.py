@@ -124,7 +124,7 @@ class TFTAdapter:
 
         self.serial = Serial()
         self.websocket = Websocket()
-        self.websocket2 = Websocket()
+        self.subscription = Websocket()
         self.subscribe()
 
         #
@@ -147,7 +147,7 @@ class TFTAdapter:
             },
             "id": 5434
         }
-        response = self.websocket2.command(query)
+        response = self.subscription.command(query)
         logging.debug("subscribe: %s" % response)
 
     def set_status(self, status):
@@ -180,7 +180,7 @@ class TFTAdapter:
         self.auto_get_temperature()
         self.auto_get_position()
         while True:
-            status = self.websocket2.listen()
+            status = self.subscription.listen()
             logging.debug("status: %s" % status)
             self.set_status(status)
 
