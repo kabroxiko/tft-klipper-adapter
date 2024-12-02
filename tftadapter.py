@@ -36,8 +36,8 @@ class Websocket:
 
     async def __async__command(self, cmd):
         await self.ws.send(json.dumps(cmd))
-        response = None
-        while response is None or response.get("id", -1) != cmd["id"]:
+        response = {}
+        while response.get("id", -1) != cmd["id"]:
             reply = await self.ws.recv()
             response = json.loads(reply)
 
@@ -50,17 +50,16 @@ class Websocket:
         return result
 
     def listen(self):
-        response = self.loop.run_until_complete(self.__async__listen())[0]
+        response = self.loop.run_until_complete(self.__async__listen())
         logging.debug("response: %s" % response)
         return response
 
     async def __async__listen(self):
         message = {}
-        while message.get('method', None) != "notify_status_update":
+        while message.get('method', None) not in ["notify_status_update", "notify_filelist_changed"]:
             message = json.loads(await self.ws.recv(10.))
-        params = message.get("params")
-        logging.debug("message: %s" % params)
-        return params
+            logging.debug("message: %s" % message)
+        return message
 
 class Serial:
     def __init__(self):
@@ -99,6 +98,7 @@ class TFTAdapter:
         self.feed_rate_tmpl = "FR:{fr:}%\nok"
         self.flow_rate_tmpl = "E0 Flow: {er:}%\nok"
         self.firmware_info = ""
+        self.files = []
 
         self.standard_gcodes = [
             "M104", # Set Hotend Temperature
@@ -179,10 +179,17 @@ class TFTAdapter:
     def ws_listening(self):
         self.auto_get_temperature()
         self.auto_get_position()
+        self.set_sd_files()
         while True:
-            status = self.subscription.listen()
-            logging.debug("status: %s" % status)
-            self.set_status(status)
+            message = self.subscription.listen()
+            logging.debug("message: %s" % message)
+            if message.get('method') == "notify_status_update":
+                self.set_status(message.get("params")[0])
+            if message.get('method') == "notify_filelist_changed":
+                if message.get('params')[0].get("action") in ["create_file","delete_file"] and \
+                   message.get('params')[0].get("item").get("root") == "gcodes" and \
+                   message.get('params')[0].get("item").get("path").startswith(".thumbs/") is False:
+                    self.set_sd_files()
 
     def query_status(self):
         # Query Status
@@ -365,7 +372,7 @@ class TFTAdapter:
         logging.info("Response to gcode %s: %s" % (gcode, response))
         return response
 
-    def get_sd_files(self):
+    def set_sd_files(self):
         start = time.time()
         query = {
             "jsonrpc": "2.0",
@@ -375,14 +382,15 @@ class TFTAdapter:
             },
             "id": 4644
         }
-        response = self.websocket.command(query)
+        self.files = self.subscription.command(query)
+        logging.debug("files: %s" % self.files)
+
+    def get_sd_files(self):
         message = "Begin file list\n"
-        for file in response:
+        for file in self.files:
             message = "%s%s %s\n" % (message, file["path"], file["size"])
         message = "%sEnd file list\n" % message
         message = "%sok" % message
-        end = time.time()
-        logging.info("Response (%s): %s" % (end - start, message))
         return message
 
     def get_file_metadata(self, filename):
