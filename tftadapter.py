@@ -1,555 +1,155 @@
-import atexit
-import sys
-import json
-import time
-import threading
-import logging
-import socket
-import errno
-from websockets.asyncio.client import connect
 import asyncio
-import serial
-import traceback
-import argparse
+import websockets
+import json
+import os
+import logging
 
-class Websocket:
-    def __init__(self):
-        self.ws = None
-        self.ws_uri = "%s/websocket?token=" % (args.moonraker_uri)
-        self.loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(self.loop)
-        # perform a synchronous connect
-        self.loop.run_until_complete(self.__async__connect())
+# Set up logging configuration with DEBUG level
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 
-    async def __async__connect(self):
-        logging.info("attempting connection to {}".format(self.ws_uri))
-        # perform async connect, and store the connected WebSocketClientProtocol
-        # object, for later reuse for send & recv
-        self.ws = await connect(self.ws_uri)
-        logging.info("connected")
+# Define Moonraker URI with token (adjust for your setup)
+MOONRAKER_URI = f"ws://localhost:7125/websocket?token={os.getenv('MOONRAKER_TOKEN', 'your_token_here')}"
 
-    def command(self, cmd):
-        logging.debug("query: %s" % cmd)
-        response = self.loop.run_until_complete(self.__async__command(cmd))
-        logging.debug("response: %s" % response)
-        return response
-
-    async def __async__command(self, cmd):
-        await self.ws.send(json.dumps(cmd))
-        response = {}
-        while response.get("id", -1) != cmd["id"]:
-            reply = await self.ws.recv()
-            response = json.loads(reply)
-
-        if response.get("result") is not None:
-            result = response.get("result")
-        elif response.get("error") is not None:
-            result = "Error:%s\n" % response.get("error").get("message").replace("\n", " ")
-
-        logging.debug("result: %s" % result)
-        return result
-
-    def listen(self):
-        response = self.loop.run_until_complete(self.__async__listen())
-        logging.debug("response: %s" % response)
-        return response
-
-    async def __async__listen(self):
-        message = {}
-        while message.get('method', None) not in ["notify_status_update", "notify_filelist_changed"]:
-            message = json.loads(await self.ws.recv(10.))
-            logging.debug("message: %s" % message)
-        return message
-
-class Serial:
-    def __init__(self):
-        self.lock = threading.Lock()
-        self.tft_serial = serial.Serial(args.tft_device, args.tft_baud)
-        atexit.register(self.exit_handler)
-
-    def exit_handler(self):
-        if self.tft_serial.is_open:
-            self.tft_serial.close()
-        logging.debug("Serial closed")
-
-    def write_to_serial(self, message):
-        if self.tft_serial.is_open:
-            self.lock.acquire()
-            try:
-                for data in message.splitlines():
-                    logging.info("message: %s" % data)
-                self.tft_serial.write(bytes("%s\n" % message, encoding='utf-8'))
-            finally:
-                self.lock.release()
-        else:
-            logging.error("serial port is not open")
-
-
-class TFTAdapter:
-    def __init__(self):
-        self.heater_bed = {"temperature": 0, "target": 0}
-        self.extruder = {"temperature": 0, "target": 0}
-        self.gcode_position = [0, 0, 0, 0]
-        self.extrude_factor = 0
-        self.speed_factor = 0
-
-        self.temperature_tmpl = "ok T:{ETemp:.2f} /{ETarget:.2f} B:{BTemp:.2f} /{BTarget:.2f} @:0 B@:0"
-        self.position_tmpl = "X:{x:.2f} Y:{y:.2f} Z:{z:.2f} E:{e:.2f} \nok"
-        self.feed_rate_tmpl = "FR:{fr:}%\nok"
-        self.flow_rate_tmpl = "E0 Flow: {er:}%\nok"
-        self.firmware_info = ""
-        self.files = []
-
-        self.standard_gcodes = [
-            "M104", # Set Hotend Temperature
-            "M140", # Set Bed Temperature
-            "M106", # Set Fan Speed
-            "M84",  # Disable steppers
-            "G90",  # Absolute Positioning
-            "G91",  # Relative Positioning
-            "G0",   # Linear Move
-            "M24",  # Start or Resume SD print
-            "M25",  # Pause SD print
-            "M108", # Break and Continue
-            "G28"   # Auto Home
-        ]
-
-        self.unimplemented_gcodes = [
-            "T0",   # Select or Report Tool
-            "M92",  # Set Axis Steps-per-unit (not implemented)
-        ]
-
-        self.auto_report_temperature = "off"
-        self.auto_report_position = "off"
-
-        self.serial = Serial()
-        self.websocket = Websocket()
-        self.subscription = Websocket()
-        self.subscribe()
-
-        #
-        #create and start threads
-        #
-        threading.Thread(target=self.ws_listening).start()
-        threading.Thread(target=self.tft_listening).start()
-
-    def subscribe(self):
-        # Query Status
-        query = {
-            "jsonrpc": "2.0",
-            "method": "printer.objects.subscribe",
-            "params": {
-                "objects": {
-                    "extruder": None,
-                    "heater_bed": None,
-                    "gcode_move": None
-                }
-            },
-            "id": 5434
-        }
-        response = self.subscription.command(query)
-        logging.debug("subscribe: %s" % response)
-
-    def set_status(self, status):
-        if 'heater_bed' in status:
-            if "temperature" in status['heater_bed']:
-                self.heater_bed["temperature"] = status['heater_bed']["temperature"]
-            if "target" in status['heater_bed']:
-                self.heater_bed["target"] = status['heater_bed']["target"]
-        if 'extruder' in status:
-            if "temperature" in status['extruder']:
-                self.extruder["temperature"] = status['extruder']["temperature"]
-            if "target" in status['extruder']:
-                self.extruder["target"] = status['extruder']["target"]
-        if 'gcode_move' in status:
-            gcode_move = status['gcode_move']
-            if "gcode_position" in status['gcode_move']:
-                self.gcode_position = gcode_move['gcode_position']
-            if "speed_factor" in status['gcode_move']:
-                self.speed_factor = gcode_move['speed_factor']
-            if "extrude_factor" in status['gcode_move']:
-                self.extrude_factor = gcode_move['extrude_factor']
-
-        logging.debug("heater_bed: %s" % self.heater_bed)
-        logging.debug("extruder: %s" % self.extruder)
-        logging.debug("gcode_position: %s" % self.gcode_position)
-        logging.debug("speed_factor: %s" % self.speed_factor)
-        logging.debug("extrude_factor: %s" % self.extrude_factor)
-
-    def ws_listening(self):
-        self.auto_get_temperature()
-        self.auto_get_position()
-        self.set_sd_files()
-        while True:
-            message = self.subscription.listen()
-            logging.debug("message: %s" % message)
-            if message.get('method') == "notify_status_update":
-                self.set_status(message.get("params")[0])
-            if message.get('method') == "notify_filelist_changed":
-                if message.get('params')[0].get("action") in ["create_file","delete_file"] and \
-                   message.get('params')[0].get("item").get("root") == "gcodes" and \
-                   message.get('params')[0].get("item").get("path").startswith(".thumbs/") is False:
-                    self.set_sd_files()
-
-    def query_status(self):
-        # Query Status
-        query = {
+async def send_to_moonraker(websocket, command):
+    """Send a Marlin command to Moonraker as an API request."""
+    if command == "M105":
+        # Use printer.objects.query to get the status of the extruder and heater bed
+        message = {
             "jsonrpc": "2.0",
             "method": "printer.objects.query",
             "params": {
-                "objects": {
-                    "extruder": None,
-                    "heater_bed": None,
-                    "gcode_move": None
-                }
+                "objects": ["extruder", "heater_bed"]
             },
-            "id": 1234
+            "id": 1
         }
-        response = self.websocket.command(query)
-        status = response["status"]
-        logging.debug("status: %s" % status)
-
-    def get_position(self):
-        if self.auto_report_position != "on":
-            self.query_status()
-        message = self.position_tmpl.format(
-            x=self.gcode_position[0],
-            y=self.gcode_position[1],
-            z=self.gcode_position[2],
-            e=self.gcode_position[3]
-        )
-        self.serial.write_to_serial(message)
-
-    def auto_get_position(self):
-        self.auto_report_position = "on"
-        refresh_time = 3
-        threading.Timer(refresh_time, self.auto_get_position).start()
-        self.get_position()
-
-    def get_temperature(self):
-        if self.auto_report_temperature != "on":
-            self.query_status()
-        message = self.temperature_tmpl.format(
-            ETemp   = self.extruder['temperature'],
-            ETarget = self.extruder['target'],
-            BTemp   = self.heater_bed['temperature'],
-            BTarget = self.heater_bed['target']
-        )
-        self.serial.write_to_serial(message)
-
-    def auto_get_temperature(self):
-        self.auto_report_temperature = "on"
-        refresh_time = 3
-        threading.Timer(refresh_time, self.auto_get_temperature).start()
-        self.get_temperature()
-
-    def query_firmware_info(self):
-        # Query firmware Info
-        id = 5153
-        query = {
+    elif command.startswith("M104"):
+        # Set extruder temperature (equivalent to M104)
+        temp = int(command.split('S')[1])
+        message = {
             "jsonrpc": "2.0",
-            "method": "printer.info",
-            "id": id
-        }
-        response = self.websocket.command(query)
-        message = "FIRMWARE_NAME:Klipper %s" % (response["software_version"])
-        message = "%s SOURCE_CODE_URL:https://github.com/Klipper3d/klipper" % (message)
-        message = "%s PROTOCOL_VERSION:1.0" % (message)
-        message = "%s MACHINE_TYPE:Artillery Genius Pro\n" % (message)
-        message = "%sCap:EEPROM:1\n" % (message)
-        message = "%sCap:AUTOREPORT_TEMP:1\n" % (message)
-        message = "%sCap:AUTOREPORT_POS:1\n" % (message)
-        message = "%sCap:AUTOLEVEL:1\n" % (message)
-        message = "%sCap:Z_PROBE:1\n" % (message)
-        message = "%sCap:LEVELING_DATA:0\n" % (message)
-        message = "%sCap:SOFTWARE_POWER:0\n" % (message)
-        message = "%sCap:TOGGLE_LIGHTS:0\n" % (message)
-        message = "%sCap:CASE_LIGHT_BRIGHTNESS:0\n" % (message)
-        message = "%sCap:EMERGENCY_PARSER:1\n" % (message)
-        message = "%sCap:PROMPT_SUPPORT:0\n" % (message)
-        message = "%sCap:SDCARD:1\n" % (message)
-        message = "%sCap:MULTI_VOLUME:0\n" % (message)
-        message = "%sCap:AUTOREPORT_SD_STATUS:1\n" % (message)
-        message = "%sCap:LONG_FILENAME:1\n" % (message)
-        message = "%sCap:BABYSTEPPING:1\n" % (message)
-        message = "%sCap:BUILD_PERCENT:1\n" % (message)  # M73 support
-        message = "%sCap:CHAMBER_TEMPERATURE:0" % (message)
-        self.serial.write_to_serial(message)
-
-    def query_report_settings(self):
-        # Query Report Settings
-        id = 6726
-        query = {
-            "jsonrpc": "2.0",
-            "method": "printer.objects.query",
+            "method": "printer.objects.temperature.set_temperature",
             "params": {
-                "objects": {
-                    "configfile": ["settings"],
-                    "toolhead": None,
-                    "gcode_move": ["homing_origin"],
-                    "fan": ["speed"]
-                }
+                "tool0": temp
             },
-            "id": id
+            "id": 2
         }
-        response = self.websocket.command(query)
-        status = response["status"]
-        bltouch = None
-        settings = status["configfile"]["settings"]
-        toolhead = status["toolhead"]
-        gcode_move = status["gcode_move"]
-        extruder = settings["extruder"]
-        printer = settings["printer"]
-        bltouch = settings["bltouch"]
-        # Max feedrates (units/s):
-        message = "M203 X%s Y%s Z%s E%s" % (
-            toolhead["max_velocity"],
-            toolhead["max_velocity"],
-            printer["max_z_velocity"],
-            extruder["max_extrude_only_velocity"]
-        )
-        # Max Acceleration (units/s2):
-        message = "%sM201 X%s Y%s Z%s E%s" % (
-            message,
-            toolhead["max_accel"],
-            toolhead["max_accel"],
-            printer["max_z_accel"],
-            extruder["max_extrude_only_accel"]
-        )
-        # Home offset
-        message = "%sM206 X%s Y%s Z%s" % (
-            message,
-            gcode_move["homing_origin"][0],
-            gcode_move["homing_origin"][1],
-            gcode_move["homing_origin"][2]
-        )
-        # Z-Probe Offset
-        if bltouch is not None:
-            message = "%sM851 X%s Y%s Z%s" % (
-                message,
-                bltouch["x_offset"],
-                bltouch["y_offset"],
-                bltouch["z_offset"]
-            )
-        # TODO: Respuesta en caso de no tener bltouch
-        # else:
-        #     message = "%sM851 X%s Y%s Z%s" % (
-        #         message,
-        #         probe["x_offset"],
-        #         probe["y_offset"],
-        #         probe["z_offset"]
-        #     )
-        # Auto Bed Leveling
-        message = "%sM420 S1 Z%s\n" % (message, settings["bed_mesh"]["fade_end"])
-        # Fan Speed
-        message = "%sM106 S%s" % (message, status["fan"]["speed"])
-        logging.info("message: %s" % message)
-
-        self.serial.write_to_serial(message)
-
-    def send_speed_factor(self):
-        if self.auto_report_position != "on":
-            self.query_status()
-        message = self.feed_rate_tmpl.format(fr=self.speed_factor*100)
-        self.serial.write_to_serial(message)
-
-    def send_extrude_factor(self):
-        if self.auto_report_position != "on":
-            self.query_status()
-        message = self.flow_rate_tmpl.format(er=self.extrude_factor*100)
-        self.serial.write_to_serial(message)
-
-    def send_gcode_to_api(self, gcode):
-        query = {
+    elif command.startswith("M106"):
+        # Set fan speed (equivalent to M106)
+        speed = int(command.split('S')[1])
+        message = {
+            "jsonrpc": "2.0",
+            "method": "printer.objects.fan.set_speed",
+            "params": {
+                "fan0": speed
+            },
+            "id": 3
+        }
+    elif command == "G28":
+        # Home all axes (equivalent to G28)
+        message = {
             "jsonrpc": "2.0",
             "method": "printer.gcode.script",
             "params": {
-                "script": gcode
+                "script": ["G28"]
             },
-            "id": 4758
+            "id": 4
         }
-        response = self.websocket.command(query)
-        logging.info("Response to gcode %s: %s" % (gcode, response))
-        return response
-
-    def set_sd_files(self):
-        start = time.time()
-        query = {
+    elif command.startswith("G1"):
+        # Move command (equivalent to G1)
+        gcode = command
+        message = {
             "jsonrpc": "2.0",
-            "method": "server.files.list",
+            "method": "printer.gcode.script",
             "params": {
-                "root": "gcodes"
+                "script": [gcode]
             },
-            "id": 4644
+            "id": 5
         }
-        self.files = self.subscription.command(query)
-        logging.debug("files: %s" % self.files)
+    else:
+        logging.error(f"Unknown command: {command}")
+        return None
 
-    def get_sd_files(self):
-        message = "Begin file list\n"
-        for file in self.files:
-            message = "%s%s %s\n" % (message, file["path"], file["size"])
-        message = "%sEnd file list\n" % message
-        message = "%sok" % message
-        return message
+    # Send the message to Moonraker
+    await websocket.send(json.dumps(message))
+    logging.debug(f"Sent command: {command} to Moonraker - Message: {json.dumps(message)}")
 
-    def get_file_metadata(self, filename):
-        logging.info("filename: <%s>" % filename)
-        query = {
-            "jsonrpc": "2.0",
-            "method": "server.files.metadata",
-            "params": {
-                "filename": filename
-            },
-            "id": 3545
-        }
-        response = self.websocket.command(query)
-        logging.debug("Response: %s" % response)
-        message = "File opened:%s Size:%s\n" % (response["filename"], response["size"])
-        message = "%sFile selected\n" % message
-        message = "%sok" % message
-        logging.info("Response: %s" % message)
-        return message
+async def subscribe_to_updates(websocket):
+    """Subscribe to extruder, heater_bed, and gcode_move updates from Moonraker."""
+    # Subscription message for extruder, heater_bed, and gcode_move
+    subscription_message = {
+        "jsonrpc": "2.0",
+        "method": "printer.objects.subscribe",
+        "params": {
+            "objects": {
+                "extruder": None,
+                "heater_bed": None,
+                "gcode_move": None
+            }
+        },
+        "id": 10
+    }
 
-    def is_standard_gcode(self, gcode):
-        for g in self.standard_gcodes:
-            if g in gcode.capitalize():
-                return True
-        return False
+    # Send the subscription request
+    await websocket.send(json.dumps(subscription_message))
+    logging.debug(f"Subscription message sent: {json.dumps(subscription_message)}")
 
-    def is_unimplemented_gcode(self, gcode):
-        for g in self.unimplemented_gcodes:
-            if g in gcode.capitalize():
-                return True
-        return False
+async def listen_for_updates(websocket):
+    """Listen for updates from Moonraker WebSocket."""
+    while True:
+        try:
+            response = await websocket.recv()  # Wait for a response
+            data = json.loads(response)
+            logging.debug(f"Received raw response: {response}")
 
-    def tft_listening(self):
-        while True:
-            try:
-                gcode = self.serial.tft_serial.readline().decode("utf-8").replace('\n','')
-                logging.info("gcode: %s" % gcode)
-                if self.is_standard_gcode(gcode):
-                    # Standard gcode
-                    response = self.send_gcode_to_api(gcode)
-                    self.serial.write_to_serial(response)
-                elif self.is_unimplemented_gcode(gcode):
-                    # Unimplemented gcode
-                    logging.warning("Unimplemented gcode")
-                    self.serial.write_to_serial("ok")
-                elif "M105" in gcode.capitalize():
-                    # Report Temperatures
-                    self.get_temperature()
-                elif "M211" in gcode.capitalize():
-                    # Software Endstops
-                    self.serial.write_to_serial("ON")
-                # elif "M82" in gcode.capitalize():
-                #     # E Absolute
-                #     pass
-                elif "M154" in gcode.capitalize():
-                    # Position Auto-Report
-                    # Temperature Auto-Report
-                    if self.auto_report_position != "on":
-                        self.auto_get_position()
-                    self.serial.write_to_serial("ok")
-                # elif "M420" in gcode.capitalize():
-                #     # Bed Leveling State
-                    # pass
-                elif "M503" in gcode.capitalize():
-                    # Report Settings
-                    self.query_report_settings()
-                elif "M155" in gcode.capitalize():
-                    # Temperature Auto-Report
-                    if self.auto_report_temperature != "on":
-                        self.auto_get_temperature()
-                    self.serial.write_to_serial("ok")
-                elif "M115" in gcode.capitalize():
-                    # Firmware Info
-                    self.query_firmware_info()
-                elif "M114" in gcode.capitalize():
-                    # Get Current Position:
-                    self.get_position()
-                elif "M21" in gcode.capitalize():
-                    # Init SD card
-                    self.send_gcode_to_api(gcode)
-                    self.serial.write_to_serial("SD card ok")
-                elif "M20" in gcode.upper():
-                    # List SD Card
-                    response = self.get_sd_files()
-                    self.serial.write_to_serial(response)
-                elif "M33" in gcode.capitalize():
-                    # Get Long Path
-                    filename = gcode.split(" ")[1]
-                    self.serial.write_to_serial("%s" % filename)
-                elif "M23" in gcode.capitalize():
-                    # Select SD file
-                    self.send_gcode_to_api(gcode)
-                    filename = gcode.split("/")[1]
-                    response = self.get_file_metadata(filename.replace('\n',''))
-                    self.serial.write_to_serial(response)
-                elif "M27" in gcode.capitalize():
-                    # Report SD print status
-                    # TODO: agregar manejo de M27 S3
-                    response = self.send_gcode_to_api(gcode)
-                    self.serial.write_to_serial(response)
-                elif "M524" in gcode.capitalize():
-                    # Abort SD print
-                    response = self.send_gcode_to_api("CANCEL_PRINT")
-                    self.serial.write_to_serial(response)
-                elif "M118" in gcode.capitalize():
-                    # Serial print
-                    # message = gcode.split(" ", 1)[1]
-                    # if message == "P0 A1 action:cancel":
-                    #     response = self.send_gcode_to_api("CANCEL_PRINT")
-                    response = self.send_gcode_to_api(gcode)
-                    self.serial.write_to_serial(response)
-                elif "G1" in gcode.capitalize():
-                    # Linear Move
-                    self.send_gcode_to_api("G91")
-                    self.send_gcode_to_api(gcode)
-                    self.send_gcode_to_api("G90")
-                    self.serial.write_to_serial("ok")
-                    # self.serial.write_to_serial(self.get_position())
-                elif "M220" in gcode.capitalize():
-                    if "M220 S" in gcode.upper():
-                        # Set Feedrate Percentage
-                        self.send_gcode_to_api(gcode)
-                        self.serial.write_to_serial("ok")
-                    else:
-                        # Get Feedrate Percentage
-                        self.send_speed_factor()
-                elif "M221" in gcode.capitalize():
-                    if "M221 S" in gcode.upper():
-                        # Set Flow Percentage
-                        self.send_gcode_to_api(gcode)
-                        self.serial.write_to_serial("ok")
-                    else:
-                        # Get Flow Percentage
-                        self.send_extrude_factor()
-                else:
-                    response = self.send_gcode_to_api(gcode)
-                    if response != "ok":
-                        logging.warning("Unknown gcode")
-                    self.serial.write_to_serial(response)
-            except Exception as ex:
-                traceback.print_exc()
-                logging.error("Serial Error: %s" % ex)
+            # Check for specific notification type like 'notify_status_update'
+            if 'params' in data and 'notify_status_update' in data['params']:
+                status_update = data['params']['notify_status_update']
+                logging.debug(f"Processed status update: {status_update}")
 
+                # Extract extruder temperature info
+                if "extruder" in status_update:
+                    extruder = status_update["extruder"]
+                    logging.info(f"Extruder Update: {extruder}")
 
-parser = argparse.ArgumentParser()
-parser.add_argument('-t', '--tft_device', help='tty device', required=True)
-parser.add_argument('-b', '--tft_baud', help='bauds', default="115200")
-parser.add_argument('-u', '--moonraker_uri', help='moonraket api uri', default="ws://127.0.0.1:7125")
-parser.add_argument('-l', '--logfile', help='write log to file instead of stderr')
-parser.add_argument('-v', '--verbose', help='debug mode', action="store_true")
-args = parser.parse_args()
+                # Extract heater bed temperature info
+                if "heater_bed" in status_update:
+                    heater_bed = status_update["heater_bed"]
+                    logging.info(f"Heater Bed Update: {heater_bed}")
 
-logging.basicConfig(handlers = [
-                            logging.FileHandler(args.logfile)
-                                if args.logfile
-                                else logging.StreamHandler(stream=sys.stdout)
-                        ],
-                    encoding='utf-8',
-                    format='%(message)s',
-                    level=logging.DEBUG if args.verbose else logging.INFO)
+                # Extract G-code move info
+                if "gcode_move" in status_update:
+                    gcode_move = status_update["gcode_move"]
+                    logging.info(f"G-code Move Update: {gcode_move}")
 
-TFTAdapter()
+        except websockets.exceptions.ConnectionClosed as e:
+            logging.error(f"Connection closed: {e}")
+            break  # Exit the loop if the WebSocket connection is closed
+
+async def handle_communication():
+    async with websockets.connect(MOONRAKER_URI) as websocket:
+        # Subscribe to updates (extruder, heater_bed, and gcode_move)
+        await subscribe_to_updates(websocket)
+
+        # Example Marlin commands (can be extended)
+        marlin_commands = ["M105", "M104 S200", "M106 S255", "G28", "G1 X100 Y100 Z0.2 F1500"]
+
+        # Send all commands in parallel using asyncio.gather
+        tasks = [send_to_moonraker(websocket, command) for command in marlin_commands]
+        await asyncio.gather(*tasks)  # Execute all commands concurrently
+
+        # Start listening for updates (this will keep running in the background)
+        listen_task = asyncio.create_task(listen_for_updates(websocket))
+
+        # Wait for listening task to complete
+        await listen_task
+
+# Main entry point to run the communication
+async def main():
+    """Main entry point for the asyncio event loop."""
+    try:
+        await handle_communication()
+    except Exception as e:
+        logging.error(f"An error occurred: {e}")
+
+if __name__ == "__main__":
+    asyncio.run(main())
