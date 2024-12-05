@@ -1,7 +1,8 @@
 import asyncio
-import websockets
-import json
+import serial
 import logging
+import json
+import websockets
 import os
 
 # Configuration
@@ -36,17 +37,37 @@ async def send_gcode(websocket, gcode, request_id):
     except Exception as e:
         logging.error(f"Error sending G-code: {e}")
 
+async def read_serial_and_forward(websocket, request_counter):
+    """Read G-codes from the serial port and forward them to Moonraker."""
+    try:
+        with serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=1) as ser:
+            logging.info(f"Listening on {SERIAL_PORT} at {BAUD_RATE} baud.")
+            while True:
+                # Read a line of G-code from the serial port
+                if ser.in_waiting > 0:
+                    line = ser.readline().decode('utf-8').strip()
+                    if line:
+                        logging.debug(f"Received from serial: {line}")
+                        # Increment request counter and send G-code
+                        request_id = next(request_counter)
+                        await send_gcode(websocket, line, request_id)
+                # else:
+                #     # If no data in serial, log that the serial port is idle
+                #     logging.debug("Waiting for data from the serial port...")
+    except Exception as e:
+        logging.error(f"Error with serial port: {e}")
+
 async def handle_messages(websocket):
     """Handle messages from the WebSocket."""
     while True:
         try:
             # Wait for a message from the WebSocket
             message = await websocket.recv()
-            # logging.debug(f"Received WebSocket message: {message}")
+            logging.debug(f"Received WebSocket message: {message}")
 
             data = json.loads(message)
 
-            # Check for specific methods or handle general messages
+            # Handle responses or status updates
             if "method" in data and data["method"] == "notify_status_update":
                 logging.info(f"Received status update: {data['params']}")
             elif "id" in data:
@@ -83,7 +104,10 @@ async def moonraker_client():
             logging.info("Subscription request sent. Waiting for messages...")
 
             # Handle incoming messages
-            await handle_messages(websocket)
+            await asyncio.gather(
+                read_serial_and_forward(websocket, request_counter),
+                handle_messages(websocket)
+            )
     except Exception as e:
         logging.error(f"Error in WebSocket connection: {e}")
         await asyncio.sleep(1)
