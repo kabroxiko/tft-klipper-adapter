@@ -22,8 +22,8 @@ logging.basicConfig(
     handlers=[logging.StreamHandler()]
 )
 
-async def send_gcode(websocket, gcode, request_id):
-    """Send a Marlin G-code command as a JSON-RPC request."""
+async def send_gcode_and_receive_response(websocket, gcode, request_id):
+    """Send a Marlin G-code command as a JSON-RPC request and wait for the response."""
     request = {
         "jsonrpc": "2.0",
         "method": "printer.gcode.script",
@@ -36,6 +36,49 @@ async def send_gcode(websocket, gcode, request_id):
         logging.debug(f"Sent G-code: {gcode} with ID: {request_id}")
     except Exception as e:
         logging.error(f"Error sending G-code: {e}")
+        await reconnect_websocket()
+
+async def listen_websocket_messages(websocket, request_counter):
+    """Single routine to listen for both updates and G-code responses."""
+    while True:
+        try:
+            # Wait for a message from the WebSocket
+            message = await websocket.recv()
+            logging.debug(f"Received WebSocket message: {message}")
+
+            data = json.loads(message)
+
+            # Handle responses to G-code commands (messages with an 'id' field)
+            if "id" in data:
+                if "result" in data:
+                    logging.info(f"Response to request ID {data['id']}: {data['result']}")
+                    # Print the response directly
+                    print(f"Response to G-code with ID {data['id']}: {data['result']}")
+                else:
+                    logging.warning(f"Unexpected response for G-code with ID {data['id']}: {data}")
+
+            # Handle status updates (messages with 'method' = 'notify_status_update')
+            elif "method" in data and data["method"] == "notify_status_update":
+                logging.info(f"Received status update: {data['params']}")
+                # Print the status update
+                print(f"Status Update: {data['params']}")
+
+            else:
+                logging.warning(f"Unhandled message: {data}")
+
+        except websockets.exceptions.ConnectionClosed as e:
+            logging.error(f"WebSocket connection closed unexpectedly: {e}")
+            await reconnect_websocket()
+            break
+        except Exception as e:
+            logging.error(f"Error processing WebSocket message: {e}")
+            break
+
+async def reconnect_websocket():
+    """Reconnect to WebSocket if the connection is lost."""
+    logging.info("Attempting to reconnect to WebSocket...")
+    await asyncio.sleep(1)  # Wait a moment before reconnecting
+    return await websockets.connect(MOONRAKER_WS_URL)
 
 async def read_serial_and_forward(websocket, request_counter):
     """Read G-codes from the serial port and forward them to Moonraker."""
@@ -50,33 +93,9 @@ async def read_serial_and_forward(websocket, request_counter):
                         logging.debug(f"Received from serial: {line}")
                         # Increment request counter and send G-code
                         request_id = next(request_counter)
-                        await send_gcode(websocket, line, request_id)
-                # else:
-                #     # If no data in serial, log that the serial port is idle
-                #     logging.debug("Waiting for data from the serial port...")
+                        await send_gcode_and_receive_response(websocket, line, request_id)
     except Exception as e:
         logging.error(f"Error with serial port: {e}")
-
-async def handle_messages(websocket):
-    """Handle messages from the WebSocket."""
-    while True:
-        try:
-            # Wait for a message from the WebSocket
-            message = await websocket.recv()
-            logging.debug(f"Received WebSocket message: {message}")
-
-            data = json.loads(message)
-
-            # Handle responses or status updates
-            if "method" in data and data["method"] == "notify_status_update":
-                logging.info(f"Received status update: {data['params']}")
-            elif "id" in data:
-                logging.info(f"Response to request ID {data['id']}: {data}")
-            else:
-                logging.warning(f"Unhandled message: {data}")
-        except Exception as e:
-            logging.error(f"Error processing WebSocket message: {e}")
-            break
 
 async def moonraker_client():
     """Connect to Moonraker, read serial data, and handle WebSocket messages."""
@@ -103,10 +122,10 @@ async def moonraker_client():
             await websocket.send(json.dumps(subscription_request))
             logging.info("Subscription request sent. Waiting for messages...")
 
-            # Handle incoming messages
+            # Handle incoming WebSocket messages and serial input in parallel
             await asyncio.gather(
                 read_serial_and_forward(websocket, request_counter),
-                handle_messages(websocket)
+                listen_websocket_messages(websocket, request_counter)
             )
     except Exception as e:
         logging.error(f"Error in WebSocket connection: {e}")
