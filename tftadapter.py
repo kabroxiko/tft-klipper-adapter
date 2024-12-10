@@ -15,7 +15,7 @@ def read_gcodes_from_serial(serial_conn, gcode_queue, loop):
         try:
             line = serial_conn.readline().decode("utf-8").strip()
             if line:
-                print(f"Received G-code: {line}")
+                print(f"Received G-code from serial: {line}")
                 # Schedule the queue.put coroutine in the event loop
                 asyncio.run_coroutine_threadsafe(gcode_queue.put(line), loop)
         except Exception as e:
@@ -27,36 +27,56 @@ async def moonraker_client(gcode_queue):
     async with websockets.connect(MOONRAKER_URL) as websocket:
         print("Connected to Moonraker WebSocket")
 
-        # Continuously handle G-code and subscription responses
+        # Step 1: Subscribe to printer status updates
+        subscription_request = {
+            "jsonrpc": "2.0",
+            "method": "printer.objects.subscribe",
+            "params": {
+                "objects": {
+                    "extruder": None,
+                    "heater_bed": None,
+                    "gcode_move": None
+                }
+            },
+            "id": 1  # Unique ID for subscription
+        }
+        await websocket.send(json.dumps(subscription_request))
+        print("Subscription request sent")
+
+        # Step 2: Continuously handle G-code and subscription responses
         while True:
             try:
-                # Check if there are G-codes in the queue
+                # Process G-code queue
                 if not gcode_queue.empty():
-                    gcode = gcode_queue.get()
+                    gcode = await gcode_queue.get()
 
                     # Send the G-code to Moonraker
                     gcode_request = {
                         "jsonrpc": "2.0",
                         "method": "printer.gcode.script",
                         "params": {"script": gcode},
-                        "id": 1
+                        "id": 2  # Unique ID for G-code commands
                     }
                     await websocket.send(json.dumps(gcode_request))
                     print(f"Sent G-code to Moonraker: {gcode}")
 
-                # Process incoming WebSocket messages
-                message = await asyncio.wait_for(websocket.recv(), timeout=0.1)
-                data = json.loads(message)
+                # Process WebSocket messages
+                try:
+                    message = await asyncio.wait_for(websocket.recv(), timeout=0.1)
+                    data = json.loads(message)
 
-                # Print Moonraker responses
-                if "id" in data:
-                    print(f"Moonraker Response: {json.dumps(data)}")
-                elif "method" in data:
-                    print(f"Moonraker Update: {json.dumps(data)}")
+                    # Handle subscription updates
+                    if "method" in data and data["method"] == "notify_status_update":
+                        print(f"Subscription Update: {json.dumps(data)}")
 
-            except asyncio.TimeoutError:
-                # No message received, continue checking
-                pass
+                    # Handle G-code responses
+                    elif "id" in data and data["id"] == 2:
+                        print(f"G-code Response: {json.dumps(data)}")
+
+                except asyncio.TimeoutError:
+                    # No message received, continue
+                    pass
+
             except websockets.ConnectionClosed:
                 print("WebSocket connection closed")
                 break
