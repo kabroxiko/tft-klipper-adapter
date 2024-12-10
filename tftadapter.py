@@ -25,6 +25,18 @@ def read_gcodes_from_serial(serial_conn, gcode_queue):
             print(f"Error reading serial: {e}")
             break
 
+# Function to convert Moonraker response to Marlin-compatible response
+def convert_to_marlin_response(response_data):
+    """
+    Convert the response from Moonraker into Marlin-compatible format.
+    """
+    if "result" in response_data:
+        return "ok"  # A typical successful response in Marlin is "ok"
+    elif "error" in response_data:
+        error_message = response_data["error"].get("message", "Unknown Error")
+        return f"Error: {error_message}"  # Marlin error response format
+    return "Error: Invalid response"
+
 # Function to handle Moonraker WebSocket communication
 async def moonraker_client(gcode_queue, serial_conn):
     async with websockets.connect(MOONRAKER_URL) as websocket:
@@ -82,18 +94,12 @@ async def moonraker_client(gcode_queue, serial_conn):
                     # Handle G-code responses
                     elif "id" in data and data["id"] == 2:
                         print(f"G-code Response: {data}")
-
-                        # Convert response to Marlin format
-                        if "result" in data and data["result"] == "ok":
-                            response_message = "ok\n"  # Marlin expects 'ok' on success
-                        else:
-                            # If an error occurred, return the error message
-                            error_message = data.get("error", {}).get("message", "Unknown error")
-                            response_message = f"Error: {error_message}\n"
-
-                        # Send the response back to Artillery TFT in Marlin format
-                        serial_conn.write(response_message.encode())  # Send response to TFT
-                        print(f"Sent Marlin response back to TFT: {response_message}")
+                        # Convert response to Marlin-compatible format
+                        marlin_response = convert_to_marlin_response(data)
+                        print(f"Converted Marlin Response: {marlin_response}")
+                        # Send the response back to Artillery TFT over serial
+                        serial_conn.write(marlin_response.encode())  # Send Marlin response to TFT
+                        print(f"Sent response back to TFT: {marlin_response}")
 
                 except asyncio.TimeoutError:
                     # No message received, continue
