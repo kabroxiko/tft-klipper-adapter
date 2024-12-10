@@ -40,6 +40,11 @@ def convert_to_marlin(response):
             elif "error" in response:
                 return f"Error: {response['error']}"
 
+        # Filter out "notify_proc_stat_update"
+        if "method" in response and response["method"] == "notify_proc_stat_update":
+            logging.debug("Filtered out notify_proc_stat_update")
+            return None
+
         # Handle status update notifications
         if "method" in response and response["method"] == "notify_status_update":
             params = response.get("params", [])
