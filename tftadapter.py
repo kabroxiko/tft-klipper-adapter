@@ -10,13 +10,14 @@ SERIAL_PORT = "/dev/ttyS2"
 BAUD_RATE = 115200  # Adjust based on your device's configuration
 
 # Function to read G-codes from the serial device
-def read_gcodes_from_serial(serial_conn, gcode_queue):
+def read_gcodes_from_serial(serial_conn, gcode_queue, loop):
     while True:
         try:
             line = serial_conn.readline().decode("utf-8").strip()
             if line:
                 print(f"Received G-code: {line}")
-                gcode_queue.put(line)
+                # Schedule the queue.put coroutine in the event loop
+                asyncio.run_coroutine_threadsafe(gcode_queue.put(line), loop)
         except Exception as e:
             print(f"Error reading serial: {e}")
             break
@@ -70,13 +71,16 @@ def main():
         serial_conn = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=1)
         print(f"Connected to serial device at {SERIAL_PORT} with baud rate {BAUD_RATE}")
 
-        # Create a thread-safe queue for G-code messages
+        # Create a thread-safe asyncio queue
         gcode_queue = asyncio.Queue()
+
+        # Get the current event loop
+        loop = asyncio.get_event_loop()
 
         # Start a thread to read from the serial port
         serial_thread = threading.Thread(
             target=read_gcodes_from_serial,
-            args=(serial_conn, gcode_queue),
+            args=(serial_conn, gcode_queue, loop),
             daemon=True
         )
         serial_thread.start()
