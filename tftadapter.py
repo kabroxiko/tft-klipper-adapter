@@ -45,6 +45,12 @@ def convert_to_marlin(response):
             logging.debug("Filtered out notify_proc_stat_update")
             return None
 
+        # Handle G-code response notifications
+        if "method" in response and response["method"] == "notify_gcode_response":
+            params = response.get("params", [])
+            if params and isinstance(params[0], str):
+                return params[0]  # Return the G-code response directly
+
         # Handle status update notifications
         if "method" in response and response["method"] == "notify_status_update":
             params = response.get("params", [])
@@ -79,7 +85,7 @@ def read_gcodes_from_serial(serial_conn, gcode_queue):
         try:
             line = serial_conn.readline().decode("utf-8").strip()
             if line:
-                logging.debug(f"Received G-code from serial: {line}")
+                logging.info(f"Received G-code from serial: {line}")
                 # Add G-code to the queue (using asyncio thread-safe method)
                 gcode_queue.put_nowait(line)
                 logging.info("G-code added to queue")
