@@ -20,10 +20,18 @@ MOONRAKER_URL = "ws://localhost/websocket"
 SERIAL_PORT = "/dev/ttyS2"
 BAUD_RATE = 115200  # Adjust based on your device's configuration
 
+# Global cache for latest values
+latest_values = {
+    "extruder": {"temperature": 0.0, "target": 0.0},
+    "heater_bed": {"temperature": 0.0, "target": 0.0},
+}
+
 def convert_to_marlin(response):
     """
     Convert a Moonraker response to a Marlin-compatible format.
     """
+    global latest_values
+
     try:
         # Handle G-code execution responses
         if "id" in response and response["id"] == 2:
@@ -37,15 +45,22 @@ def convert_to_marlin(response):
             params = response.get("params", [])
             if isinstance(params, list) and len(params) > 0:
                 updates = params[0]  # The first element contains the updates
-                if "heater_bed" in updates:
-                    heater_bed = updates["heater_bed"]
-                    temperature = heater_bed.get("temperature", 0.0)
-                    return f"B:{temperature:.1f} /---"  # Format temperature in Marlin style
-                elif "extruder" in updates:
-                    extruder = updates["extruder"]
-                    temperature = extruder.get("temperature", 0.0)
-                    target = extruder.get("target", 0.0)
-                    return f"T:{temperature:.1f} /{target:.1f}"
+
+                # Update cached values with new data
+                for key, values in updates.items():
+                    if key in latest_values:
+                        latest_values[key].update({k: v for k, v in values.items() if v is not None})
+
+                # Format output using latest values
+                extruder = latest_values["extruder"]
+                heater_bed = latest_values["heater_bed"]
+
+                ETemp = extruder["temperature"]
+                ETarget = extruder["target"]
+                BTemp = heater_bed["temperature"]
+                BTarget = heater_bed["target"]
+
+                return f"ok T:{ETemp:.2f} /{ETarget:.2f} B:{BTemp:.2f} /{BTarget:.2f} @:0 B@:0"
 
         # Handle unexpected or unknown structures
         return f"Unknown response: {json.dumps(response)}"
