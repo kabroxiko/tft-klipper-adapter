@@ -26,7 +26,7 @@ def read_gcodes_from_serial(serial_conn, gcode_queue):
             break
 
 # Function to handle Moonraker WebSocket communication
-async def moonraker_client(gcode_queue):
+async def moonraker_client(gcode_queue, serial_conn):
     async with websockets.connect(MOONRAKER_URL) as websocket:
         print("Connected to Moonraker WebSocket")
 
@@ -83,6 +83,18 @@ async def moonraker_client(gcode_queue):
                     elif "id" in data and data["id"] == 2:
                         print(f"G-code Response: {data}")
 
+                        # Convert response to Marlin format
+                        if "result" in data and data["result"] == "ok":
+                            response_message = "ok\n"  # Marlin expects 'ok' on success
+                        else:
+                            # If an error occurred, return the error message
+                            error_message = data.get("error", {}).get("message", "Unknown error")
+                            response_message = f"Error: {error_message}\n"
+
+                        # Send the response back to Artillery TFT in Marlin format
+                        serial_conn.write(response_message.encode())  # Send response to TFT
+                        print(f"Sent Marlin response back to TFT: {response_message}")
+
                 except asyncio.TimeoutError:
                     # No message received, continue
                     pass
@@ -118,7 +130,7 @@ def main():
         serial_thread.start()
 
         # Run the Moonraker WebSocket client
-        asyncio.run(moonraker_client(gcode_queue))
+        asyncio.run(moonraker_client(gcode_queue, serial_conn))
     except Exception as e:
         print(f"Error: {e}")
 
