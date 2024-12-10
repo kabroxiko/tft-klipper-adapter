@@ -26,9 +26,9 @@ latest_values = {
     "heater_bed": {"temperature": 0.0, "target": 0.0},
 }
 
-def convert_to_marlin(response):
+def convert_to_marlin(response, gcode=None):
     """
-    Convert a Moonraker response to a Marlin-compatible format.
+    Convert a Moonraker response or G-code query to a Marlin-compatible format.
     """
     global latest_values
 
@@ -49,7 +49,8 @@ def convert_to_marlin(response):
         if "method" in response and response["method"] == "notify_gcode_response":
             params = response.get("params", [])
             if params and isinstance(params[0], str):
-                return params[0]  # Return the G-code response directly
+                # Parse response to Marlin format
+                return parse_temperature_response(params[0])
 
         # Handle status update notifications
         if "method" in response and response["method"] == "notify_status_update":
@@ -62,16 +63,8 @@ def convert_to_marlin(response):
                     if key in latest_values:
                         latest_values[key].update({k: v for k, v in values.items() if v is not None})
 
-                # Format output using latest values
-                extruder = latest_values["extruder"]
-                heater_bed = latest_values["heater_bed"]
-
-                ETemp = extruder["temperature"]
-                ETarget = extruder["target"]
-                BTemp = heater_bed["temperature"]
-                BTarget = heater_bed["target"]
-
-                return f"ok T:{ETemp:.2f} /{ETarget:.2f} B:{BTemp:.2f} /{BTarget:.2f} @:0 B@:0"
+                # Format the temperature response
+                return format_temperature_response()
 
         # Handle unexpected or unknown structures
         return f"Unknown response: {json.dumps(response)}"
@@ -79,6 +72,46 @@ def convert_to_marlin(response):
     except Exception as e:
         logging.error(f"Error in response conversion: {e}")
         return f"Error in response conversion: {str(e)}"
+
+
+def format_temperature_response():
+    """
+    Format the latest temperature data into the Marlin-compatible format.
+    """
+    extruder = latest_values["extruder"]
+    heater_bed = latest_values["heater_bed"]
+
+    ETemp = extruder["temperature"]
+    ETarget = extruder["target"]
+    BTemp = heater_bed["temperature"]
+    BTarget = heater_bed["target"]
+
+    # Return the temperature response
+    return f"ok T:{ETemp:.2f} /{ETarget:.2f} B:{BTemp:.2f} /{BTarget:.2f} @:0 B@:0"
+
+
+def parse_temperature_response(response_str):
+    """
+    Parse a response string and reformat it into the desired Marlin format.
+    """
+    # Example input: "B:31.4 /0.0 T0:29.1 /0.0"
+    parts = response_str.split()
+    temp_data = {"T": 0.0, "T_target": 0.0, "B": 0.0, "B_target": 0.0}
+
+    for part in parts:
+        if part.startswith("T"):
+            if "/" in part:
+                temp, target = part[2:].split("/")
+                temp_data["T"] = float(temp)
+                temp_data["T_target"] = float(target)
+        elif part.startswith("B"):
+            if "/" in part:
+                temp, target = part[2:].split("/")
+                temp_data["B"] = float(temp)
+                temp_data["B_target"] = float(target)
+
+    # Return the reformatted string
+    return f"ok T:{temp_data['T']:.2f} /{temp_data['T_target']:.2f} B:{temp_data['B']:.2f} /{temp_data['B_target']:.2f} @:0 B@:0"
 
 def read_gcodes_from_serial(serial_conn, gcode_queue):
     while True:
