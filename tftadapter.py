@@ -26,6 +26,11 @@ latest_values = {
     "heater_bed": {"temperature": 0.0, "target": 0.0},
 }
 
+latest_values = {
+    "extruder": {"temperature": 0.0, "target": 0.0},
+    "heater_bed": {"temperature": 0.0, "target": 0.0}
+}
+
 def convert_to_marlin(response, gcode=None):
     """
     Convert a Moonraker response or G-code query to a Marlin-compatible format.
@@ -58,9 +63,13 @@ def convert_to_marlin(response, gcode=None):
             if isinstance(params, list) and len(params) > 0:
                 updates = params[0]  # The first element contains the updates
 
+                # Debugging: Log the incoming updates
+                logging.debug(f"Received status update: {updates}")
+
                 # Update cached values with new data
                 for key, values in updates.items():
                     if key in latest_values:
+                        logging.debug(f"Updating {key}: {values}")
                         latest_values[key].update({k: v for k, v in values.items() if v is not None})
 
                 # Format the temperature response
@@ -81,14 +90,16 @@ def format_temperature_response():
     extruder = latest_values["extruder"]
     heater_bed = latest_values["heater_bed"]
 
-    ETemp = extruder["temperature"]
-    ETarget = extruder["target"]
-    BTemp = heater_bed["temperature"]
-    BTarget = heater_bed["target"]
+    ETemp = extruder.get("temperature", 0.0)
+    ETarget = extruder.get("target", 0.0)
+    BTemp = heater_bed.get("temperature", 0.0)
+    BTarget = heater_bed.get("target", 0.0)
+
+    # Debugging: Log the temperature values
+    logging.debug(f"Formatted temperature response: ETemp={ETemp}, ETarget={ETarget}, BTemp={BTemp}, BTarget={BTarget}")
 
     # Return the temperature response
     return f"ok T:{ETemp:.2f} /{ETarget:.2f} B:{BTemp:.2f} /{BTarget:.2f} @:0 B@:0"
-
 
 def parse_temperature_response(response_str):
     """
