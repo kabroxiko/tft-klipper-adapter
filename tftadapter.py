@@ -3,46 +3,75 @@ import websockets
 import json
 import serial
 import threading
+import logging
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,  # Set the logging level to DEBUG
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    handlers=[
+        logging.StreamHandler(),  # Log to console
+        logging.FileHandler("tft_adapter.log", mode='a')  # Log to a file
+    ]
+)
 
 # Moonraker WebSocket URL and serial device configuration
 MOONRAKER_URL = "ws://localhost/websocket"
 SERIAL_PORT = "/dev/ttyS2"
 BAUD_RATE = 115200  # Adjust based on your device's configuration
 
-# Function to read G-codes from the serial device
+def convert_to_marlin(response):
+    """
+    Convert a Moonraker response to a Marlin-compatible format.
+    """
+    try:
+        # Handle G-code execution responses
+        if "id" in response and response["id"] == 2:
+            if "result" in response and response["result"] == "ok":
+                return "ok"
+            elif "error" in response:
+                return f"Error: {response['error']}"
+
+        # Handle status update notifications
+        if "method" in response and response["method"] == "notify_status_update":
+            params = response.get("params", [])
+            if isinstance(params, list) and len(params) > 0:
+                updates = params[0]  # The first element contains the updates
+                if "heater_bed" in updates:
+                    heater_bed = updates["heater_bed"]
+                    temperature = heater_bed.get("temperature", 0.0)
+                    return f"B:{temperature:.1f} /---"  # Format temperature in Marlin style
+                elif "extruder" in updates:
+                    extruder = updates["extruder"]
+                    temperature = extruder.get("temperature", 0.0)
+                    target = extruder.get("target", 0.0)
+                    return f"T:{temperature:.1f} /{target:.1f}"
+
+        # Handle unexpected or unknown structures
+        return f"Unknown response: {json.dumps(response)}"
+
+    except Exception as e:
+        logging.error(f"Error in response conversion: {e}")
+        return f"Error in response conversion: {str(e)}"
+
 def read_gcodes_from_serial(serial_conn, gcode_queue):
     while True:
         try:
             line = serial_conn.readline().decode("utf-8").strip()
             if line:
-                print(f"Received G-code from serial: {line}")
+                logging.debug(f"Received G-code from serial: {line}")
                 # Add G-code to the queue (using asyncio thread-safe method)
-                gcode_queue.put_nowait(line)  # Directly add to the queue without asyncio.run_coroutine_threadsafe
-                print("G-code added to queue")
-            else:
-                print("No data received from serial.")
+                gcode_queue.put_nowait(line)
+                logging.info("G-code added to queue")
         except Exception as e:
-            print(f"Error reading serial: {e}")
+            logging.error(f"Error reading serial: {e}")
             break
 
-# Function to convert Moonraker response to Marlin-compatible response
-def convert_to_marlin_response(response_data):
-    """
-    Convert the response from Moonraker into Marlin-compatible format.
-    """
-    if "result" in response_data:
-        return "ok"  # A typical successful response in Marlin is "ok"
-    elif "error" in response_data:
-        error_message = response_data["error"].get("message", "Unknown Error")
-        return f"Error: {error_message}"  # Marlin error response format
-    return "Error: Invalid response"
-
-# Function to handle Moonraker WebSocket communication
 async def moonraker_client(gcode_queue, serial_conn):
     async with websockets.connect(MOONRAKER_URL) as websocket:
-        print("Connected to Moonraker WebSocket")
+        logging.info("Connected to Moonraker WebSocket")
 
-        # Step 1: Subscribe to specific objects (extruder, heater_bed, gcode_move)
+        # Subscription request
         subscription_request = {
             "jsonrpc": "2.0",
             "method": "printer.objects.subscribe",
@@ -53,79 +82,62 @@ async def moonraker_client(gcode_queue, serial_conn):
                     "gcode_move": None
                 }
             },
-            "id": 1  # Unique ID for subscription
+            "id": 1
         }
         await websocket.send(json.dumps(subscription_request))
-        print("Subscription request sent for extruder, heater_bed, and gcode_move")
+        logging.info("Subscription request sent for extruder, heater_bed, and gcode_move")
 
-        # Step 2: Continuously handle G-code and subscription responses
         while True:
             try:
-                # Check if the queue is not empty
-                queue_size = gcode_queue.qsize()  # Check the queue size
-                print(f"Checking queue size: {queue_size}")  # Debugging the queue size
+                # Check queue size
+                queue_size = gcode_queue.qsize()
+                logging.debug(f"Checking queue size: {queue_size}")
 
                 if queue_size > 0:
-                    # If the queue is not empty, get the G-code from it
                     gcode = await gcode_queue.get()
-                    print(f"Processing G-code: {gcode}")  # Debugging: should print G-code
+                    logging.debug(f"Processing G-code: {gcode}")
 
-                    # Send the G-code to Moonraker
+                    # Send G-code to Moonraker
                     gcode_request = {
                         "jsonrpc": "2.0",
                         "method": "printer.gcode.script",
                         "params": {"script": gcode},
-                        "id": 2  # Unique ID for G-code commands
+                        "id": 2
                     }
                     await websocket.send(json.dumps(gcode_request))
-                    print(f"Sent G-code to Moonraker: {gcode}")
-                else:
-                    print("Queue is empty, waiting for G-code...")
+                    logging.debug(f"Sent G-code to Moonraker: {gcode}")
 
-                # Process WebSocket messages
                 try:
                     message = await asyncio.wait_for(websocket.recv(), timeout=0.1)
                     data = json.loads(message)
+                    logging.debug(f"Received from Moonraker: {json.dumps(data)}")
 
-                    # Handle subscription updates
-                    if "method" in data and data["method"] == "notify_status_update":
-                        print(f"Subscription Update: {data}")
-
-                    # Handle G-code responses
-                    elif "id" in data and data["id"] == 2:
-                        print(f"G-code Response: {data}")
-                        # Convert response to Marlin-compatible format
-                        marlin_response = convert_to_marlin_response(data)
-                        print(f"Converted Marlin Response: {marlin_response}")
-                        # Send the response back to Artillery TFT over serial
-                        serial_conn.write(marlin_response.encode())  # Send Marlin response to TFT
-                        print(f"Sent response back to TFT: {marlin_response}")
+                    # Handle the response and send to TFT
+                    marlin_response = convert_to_marlin(data)
+                    if marlin_response:
+                        serial_conn.write(f"{marlin_response}\n".encode())
+                        logging.info(f"Sent response back to TFT: {marlin_response}")
 
                 except asyncio.TimeoutError:
-                    # No message received, continue
                     pass
 
-                await asyncio.sleep(0.1)  # Sleep to prevent blocking the event loop
+                await asyncio.sleep(0.1)
 
             except websockets.ConnectionClosed:
-                print("WebSocket connection closed")
+                logging.warning("WebSocket connection closed")
                 break
             except Exception as e:
-                print(f"Error: {e}")
+                logging.error(f"Error: {e}")
                 break
 
-# Main function to integrate serial and WebSocket
 def main():
     try:
         # Open the serial connection
         serial_conn = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=1)
-        print(f"Connected to serial device at {SERIAL_PORT} with baud rate {BAUD_RATE}")
+        logging.info(f"Connected to serial device at {SERIAL_PORT} with baud rate {BAUD_RATE}")
 
         # Create a thread-safe asyncio queue
         gcode_queue = asyncio.Queue()
-
-        # Get the current event loop
-        loop = asyncio.get_event_loop()
 
         # Start a thread to read from the serial port
         serial_thread = threading.Thread(
@@ -138,8 +150,7 @@ def main():
         # Run the Moonraker WebSocket client
         asyncio.run(moonraker_client(gcode_queue, serial_conn))
     except Exception as e:
-        print(f"Error: {e}")
+        logging.critical(f"Critical error: {e}")
 
-# Entry point
 if __name__ == "__main__":
     main()
