@@ -10,14 +10,17 @@ SERIAL_PORT = "/dev/ttyS2"
 BAUD_RATE = 115200  # Adjust based on your device's configuration
 
 # Function to read G-codes from the serial device
-def read_gcodes_from_serial(serial_conn, gcode_queue, loop):
+def read_gcodes_from_serial(serial_conn, gcode_queue):
     while True:
         try:
             line = serial_conn.readline().decode("utf-8").strip()
             if line:
                 print(f"Received G-code from serial: {line}")
-                # Schedule the queue.put coroutine in the event loop
-                asyncio.run_coroutine_threadsafe(gcode_queue.put(line), loop)
+                # Add G-code to the queue (using asyncio thread-safe method)
+                gcode_queue.put_nowait(line)  # Directly add to the queue without asyncio.run_coroutine_threadsafe
+                print("G-code added to queue")
+            else:
+                print("No data received from serial.")
         except Exception as e:
             print(f"Error reading serial: {e}")
             break
@@ -27,7 +30,7 @@ async def moonraker_client(gcode_queue):
     async with websockets.connect(MOONRAKER_URL) as websocket:
         print("Connected to Moonraker WebSocket")
 
-        # Step 1: Subscribe to printer status updates
+        # Step 1: Subscribe to specific objects (extruder, heater_bed, gcode_move)
         subscription_request = {
             "jsonrpc": "2.0",
             "method": "printer.objects.subscribe",
@@ -41,14 +44,19 @@ async def moonraker_client(gcode_queue):
             "id": 1  # Unique ID for subscription
         }
         await websocket.send(json.dumps(subscription_request))
-        print("Subscription request sent")
+        print("Subscription request sent for extruder, heater_bed, and gcode_move")
 
         # Step 2: Continuously handle G-code and subscription responses
         while True:
             try:
-                # Process G-code queue
-                if not gcode_queue.empty():
+                # Check if the queue is not empty
+                queue_size = gcode_queue.qsize()  # Check the queue size
+                print(f"Checking queue size: {queue_size}")  # Debugging the queue size
+
+                if queue_size > 0:
+                    # If the queue is not empty, get the G-code from it
                     gcode = await gcode_queue.get()
+                    print(f"Processing G-code: {gcode}")  # Debugging: should print G-code
 
                     # Send the G-code to Moonraker
                     gcode_request = {
@@ -59,6 +67,8 @@ async def moonraker_client(gcode_queue):
                     }
                     await websocket.send(json.dumps(gcode_request))
                     print(f"Sent G-code to Moonraker: {gcode}")
+                else:
+                    print("Queue is empty, waiting for G-code...")
 
                 # Process WebSocket messages
                 try:
@@ -67,15 +77,17 @@ async def moonraker_client(gcode_queue):
 
                     # Handle subscription updates
                     if "method" in data and data["method"] == "notify_status_update":
-                        print(f"Subscription Update: {json.dumps(data)}")
+                        print(f"Subscription Update: {data}")
 
                     # Handle G-code responses
                     elif "id" in data and data["id"] == 2:
-                        print(f"G-code Response: {json.dumps(data)}")
+                        print(f"G-code Response: {data}")
 
                 except asyncio.TimeoutError:
                     # No message received, continue
                     pass
+
+                await asyncio.sleep(0.1)  # Sleep to prevent blocking the event loop
 
             except websockets.ConnectionClosed:
                 print("WebSocket connection closed")
@@ -100,7 +112,7 @@ def main():
         # Start a thread to read from the serial port
         serial_thread = threading.Thread(
             target=read_gcodes_from_serial,
-            args=(serial_conn, gcode_queue, loop),
+            args=(serial_conn, gcode_queue),
             daemon=True
         )
         serial_thread.start()
