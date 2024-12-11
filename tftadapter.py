@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import argparse
 from queue import Queue
 from websockets import connect
 import serial
@@ -133,14 +134,26 @@ class TFTAdapter:
             self.websocket_handler()
         )
 
+def parse_args():
+    """Parse command-line arguments with single-letter flags"""
+    parser = argparse.ArgumentParser(description="TFT Adapter for serial communication and WebSocket interaction.")
+    parser.add_argument('-s', '--serial-port', type=str, default='/dev/ttyS2', help='Serial port for communication')
+    parser.add_argument('-b', '--baud-rate', type=int, default=115200, help='Baud rate for serial communication')
+    parser.add_argument('-w', '--websocket-url', type=str, default='ws://localhost/websocket', help='WebSocket URL')
+
+    return parser.parse_args()
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
+    # Parse command-line arguments
+    args = parse_args()
+
+    # Instantiate the adapter with arguments
     adapter = TFTAdapter(
-        serial_port="/dev/ttyS2",  # Replace with actual serial port
-        baud_rate=115200,
-        websocket_url="ws://localhost/websocket"  # Replace with actual WebSocket URL
+        serial_port=args.serial_port,
+        baud_rate=args.baud_rate,
+        websocket_url=args.websocket_url
     )
 
     try:
