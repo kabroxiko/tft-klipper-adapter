@@ -120,14 +120,17 @@ def parse_gcode_response(gcode_response):
         BTemp, BTarget = 0.0, 0.0
         ETemp, ETarget = 0.0, 0.0
 
-        for comp in components:
+        for i, comp in enumerate(components):
+            # Parse bed temperature (B)
             if comp.startswith("B:"):
                 BTemp = float(comp.split(":")[1])
-            elif comp.startswith("/"):
+            elif comp.startswith("/") and i > 0 and components[i - 1].startswith("B:"):
                 BTarget = float(comp[1:])
+
+            # Parse extruder temperature (T0)
             elif comp.startswith("T0:"):
                 ETemp = float(comp.split(":")[1])
-            elif comp.startswith("/"):
+            elif comp.startswith("/") and i > 0 and components[i - 1].startswith("T0:"):
                 ETarget = float(comp[1:])
 
         # Update latest_values for consistency
