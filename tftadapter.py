@@ -5,9 +5,10 @@ import argparse
 from queue import Queue
 from websockets import connect
 import serial
+import sys
 
 class TFTAdapter:
-    def __init__(self, serial_port, baud_rate, websocket_url):
+    def __init__(self, serial_port, baud_rate, websocket_url, log_file=None, verbose=False):
         self.serial_port = serial_port
         self.baud_rate = baud_rate
         self.websocket_url = websocket_url
@@ -17,6 +18,18 @@ class TFTAdapter:
             "extruder": {"temperature": 0.0, "target": 0.0},
             "heater_bed": {"temperature": 0.0, "target": 0.0},
         }
+
+        # Set up logging
+        self.setup_logging(log_file, verbose)
+
+    def setup_logging(self, log_file, verbose):
+        log_level = logging.DEBUG if verbose else logging.INFO
+        log_format = "%(asctime)s - %(levelname)s - %(message)s"
+
+        if log_file:
+            logging.basicConfig(filename=log_file, level=log_level, format=log_format)
+        else:
+            logging.basicConfig(stream=sys.stdout, level=log_level, format=log_format)
 
     def initialize_serial(self):
         try:
@@ -140,12 +153,12 @@ def parse_args():
     parser.add_argument('-s', '--serial-port', type=str, default='/dev/ttyS2', help='Serial port for communication')
     parser.add_argument('-b', '--baud-rate', type=int, default=115200, help='Baud rate for serial communication')
     parser.add_argument('-w', '--websocket-url', type=str, default='ws://localhost/websocket', help='WebSocket URL')
+    parser.add_argument('-l', '--log-file', type=str, default=None, help='Log file location (use stdio if not provided)')
+    parser.add_argument('-v', '--verbose', action='store_true', help='Enable verbose logging for debugging')
 
     return parser.parse_args()
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-
     # Parse command-line arguments
     args = parse_args()
 
@@ -153,7 +166,9 @@ if __name__ == "__main__":
     adapter = TFTAdapter(
         serial_port=args.serial_port,
         baud_rate=args.baud_rate,
-        websocket_url=args.websocket_url
+        websocket_url=args.websocket_url,
+        log_file=args.log_file,
+        verbose=args.verbose
     )
 
     try:
