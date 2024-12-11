@@ -55,6 +55,7 @@ class TFTAdapter:
             data = json.loads(message)
             if "method" in data and data["method"] == "notify_status_update":
                 self.update_latest_values(data.get("params", [{}])[0])
+                self.send_status_update_to_tft()  # Send status update to TFT
             elif "method" in data and data["method"] == "notify_gcode_response":
                 response = self.parse_gcode_response(data["params"][0])
                 if response:
@@ -66,6 +67,13 @@ class TFTAdapter:
         for key, values in updates.items():
             if key in self.latest_values:
                 self.latest_values[key].update(values)
+
+    def send_status_update_to_tft(self):
+        """Format the latest status and send it to the TFT display"""
+        extruder = self.latest_values["extruder"]
+        heater_bed = self.latest_values["heater_bed"]
+        temperature_status = f"ok T:{extruder['temperature']:.2f} /{extruder['target']:.2f} B:{heater_bed['temperature']:.2f} /{heater_bed['target']:.2f} @:0 B@:0"
+        self.send_to_tft(temperature_status)
 
     async def serial_reader(self):
         while True:
@@ -110,6 +118,7 @@ class TFTAdapter:
         return f"ok T:{extruder['temperature']:.2f} /{extruder['target']:.2f} B:{heater_bed['temperature']:.2f} /{heater_bed['target']:.2f} @:0 B@:0"
 
     def send_to_tft(self, message):
+        """Send a response to the TFT display via serial connection"""
         try:
             self.serial_connection.write((message + "\n").encode("utf-8"))
             logging.info(f"Sent response back to TFT: {message}")
@@ -129,9 +138,9 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
     adapter = TFTAdapter(
-        serial_port="/dev/ttyS2",
+        serial_port="/dev/ttyS2",  # Replace with actual serial port
         baud_rate=115200,
-        websocket_url="ws://localhost/websocket"
+        websocket_url="ws://localhost/websocket"  # Replace with actual WebSocket URL
     )
 
     try:
