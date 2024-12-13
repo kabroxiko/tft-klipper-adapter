@@ -16,7 +16,8 @@ class TFTAdapter:
         self.latest_values = {
             "extruder": {"temperature": 0.0, "target": 0.0},
             "heater_bed": {"temperature": 0.0, "target": 0.0},
-            "gcode_move": {"position": {"x": 0.0, "y": 0.0, "z": 0.0, "e": 0.0}}
+            "gcode_move": {"position": {"x": 0.0, "y": 0.0, "z": 0.0, "e": 0.0}},
+            "motion": {"speed_factor": 100.0, "extrude_factor": 100.0}
         }
 
     def initialize_serial(self):
@@ -45,7 +46,8 @@ class TFTAdapter:
                 "objects": {
                     "extruder": None,
                     "heater_bed": None,
-                    "gcode_move": None
+                    "gcode_move": None,
+                    "motion": None
                 }
             }
         })
@@ -96,6 +98,10 @@ class TFTAdapter:
                 elif gcode == "M114":
                     response = self.format_position_response()
                     self.send_to_tft(response)
+                elif gcode.startswith("M220"):
+                    self.process_feed_rate_command(gcode)
+                elif gcode.startswith("M221"):
+                    self.process_flow_rate_command(gcode)
             await asyncio.sleep(0.1)
 
     def parse_gcode_response(self, gcode_response):
@@ -124,6 +130,30 @@ class TFTAdapter:
     def format_position_response(self):
         position = self.latest_values["gcode_move"]["position"]
         return f"X:{position['x']:.2f} Y:{position['y']:.2f} Z:{position['z']:.2f} E:{position['e']:.2f} \nok"
+
+    def process_feed_rate_command(self, gcode):
+        try:
+            parts = gcode.split()
+            feed_rate = 100.0
+            for part in parts:
+                if part.startswith("S"):
+                    feed_rate = float(part[1:])
+            self.latest_values["motion"]["speed_factor"] = feed_rate
+            self.send_to_tft(f"ok F:{feed_rate:.2f}%")
+        except Exception as e:
+            logging.error(f"Error processing M220 command: {e}")
+
+    def process_flow_rate_command(self, gcode):
+        try:
+            parts = gcode.split()
+            flow_rate = 100.0
+            for part in parts:
+                if part.startswith("S"):
+                    flow_rate = float(part[1:])
+            self.latest_values["motion"]["extrude_factor"] = flow_rate
+            self.send_to_tft(f"ok R:{flow_rate:.2f}%")
+        except Exception as e:
+            logging.error(f"Error processing M221 command: {e}")
 
     def send_to_tft(self, message):
         try:
