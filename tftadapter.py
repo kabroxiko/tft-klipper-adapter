@@ -16,6 +16,7 @@ class TFTAdapter:
         self.latest_values = {
             "extruder": {"temperature": 0.0, "target": 0.0},
             "heater_bed": {"temperature": 0.0, "target": 0.0},
+            "gcode_move": {"position": {"x": 0.0, "y": 0.0, "z": 0.0, "e": 0.0}}
         }
 
     def initialize_serial(self):
@@ -56,7 +57,7 @@ class TFTAdapter:
             data = json.loads(message)
             if "method" in data and data["method"] == "notify_status_update":
                 self.update_latest_values(data.get("params", [{}])[0])
-                self.send_status_update_to_tft()  # Send status update to TFT
+                self.send_status_update_to_tft()
             elif "method" in data and data["method"] == "notify_gcode_response":
                 response = self.parse_gcode_response(data["params"][0])
                 if response:
@@ -70,7 +71,6 @@ class TFTAdapter:
                 self.latest_values[key].update(values)
 
     def send_status_update_to_tft(self):
-        """Format the latest status and send it to the TFT display"""
         extruder = self.latest_values["extruder"]
         heater_bed = self.latest_values["heater_bed"]
         temperature_status = f"ok T:{extruder['temperature']:.2f} /{extruder['target']:.2f} B:{heater_bed['temperature']:.2f} /{heater_bed['target']:.2f} @:0 B@:0"
@@ -92,6 +92,9 @@ class TFTAdapter:
                 logging.info(f"Processing G-code: {gcode}")
                 if gcode == "M105":
                     response = self.format_temperature_response()
+                    self.send_to_tft(response)
+                elif gcode == "M114":
+                    response = self.format_position_response()
                     self.send_to_tft(response)
             await asyncio.sleep(0.1)
 
@@ -118,8 +121,11 @@ class TFTAdapter:
         heater_bed = self.latest_values["heater_bed"]
         return f"ok T:{extruder['temperature']:.2f} /{extruder['target']:.2f} B:{heater_bed['temperature']:.2f} /{heater_bed['target']:.2f} @:0 B@:0"
 
+    def format_position_response(self):
+        position = self.latest_values["gcode_move"]["position"]
+        return f"X:{position['x']:.2f} Y:{position['y']:.2f} Z:{position['z']:.2f} E:{position['e']:.2f} \nok"
+
     def send_to_tft(self, message):
-        """Send a response to the TFT display via serial connection"""
         try:
             self.serial_connection.write((message + "\n").encode("utf-8"))
             logging.info(f"Sent response back to TFT: {message}")
@@ -135,7 +141,6 @@ class TFTAdapter:
         )
 
 def parse_args():
-    """Parse command-line arguments with single-letter flags"""
     parser = argparse.ArgumentParser(description="TFT Adapter for serial communication and WebSocket interaction.")
     parser.add_argument('-s', '--serial-port', type=str, default='/dev/ttyS2', help='Serial port for communication')
     parser.add_argument('-b', '--baud-rate', type=int, default=115200, help='Baud rate for serial communication')
@@ -145,7 +150,6 @@ def parse_args():
     return parser.parse_args()
 
 def setup_logging(log_file, verbose):
-    """Set up logging configuration based on arguments"""
     log_level = logging.DEBUG if verbose else logging.INFO
     log_format = "%(asctime)s - %(levelname)s - %(message)s"
     if log_file:
@@ -155,11 +159,8 @@ def setup_logging(log_file, verbose):
 
 if __name__ == "__main__":
     args = parse_args()
-
-    # Set up logging
     setup_logging(args.log_file, args.verbose)
 
-    # Instantiate the adapter with arguments
     adapter = TFTAdapter(
         serial_port=args.serial_port,
         baud_rate=args.baud_rate,
