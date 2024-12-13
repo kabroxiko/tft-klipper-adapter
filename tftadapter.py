@@ -114,6 +114,13 @@ class TFTAdapter:
                     self.serial_handler.write_response(response)
             await asyncio.sleep(0.1)
 
+    async def periodic_temperature_update(self):
+        while True:
+            response = self.format_temperature_response()
+            if response:
+                self.serial_handler.write_response(response)
+            await asyncio.sleep(3)
+
     def handle_gcode(self, gcode):
         if gcode == "M105":
             return self.format_temperature_response()
@@ -197,56 +204,49 @@ class TFTAdapter:
         )
 
     def format_m211_response(self):
-        state = self.websocket_handler.latest_values["soft_endstops"]
+        state = self.websocket_handler.latest_values.get("endstops", {}).get("soft_endstop", "disabled")
         return M211_RESPONSE_FORMAT.format(state=state)
 
-    async def run(self):
-        await asyncio.gather(
-            self.serial_reader(),
-            self.process_gcode_queue(),
-            self.websocket_handler.handler()
-        )
 
+async def main():
+    parser = argparse.ArgumentParser(description="TFT Adapter for Klipper")
+    parser.add_argument("-p", help="Serial port", required=True)
+    parser.add_argument("-b", help="Baud rate", type=int, default=115200)
+    parser.add_argument("-w", help="WebSocket URL", required=True)
+    parser.add_argument("-l", help="Log file location", default=None)
+    parser.add_argument("-v", help="Verbose mode", action="store_true")
 
-def parse_args():
-    parser = argparse.ArgumentParser(description="TFT Adapter for serial communication and WebSocket interaction.")
-    parser.add_argument('-s', '--serial-port', type=str, default='/dev/ttyS2', help='Serial port to use.')
-    parser.add_argument('-b', '--baud-rate', type=int, default=115200, help='Baud rate for serial communication.')
-    parser.add_argument('-w', '--websocket-url', type=str, default='ws://localhost/websocket', help='WebSocket URL to connect to.')
-    return parser.parse_args()
+    args = parser.parse_args()
 
-
-def main():
-    args = parse_args()
-    logging.basicConfig(level=logging.INFO)
-
-    serial_handler = SerialHandler(args.serial_port, args.baud_rate)
-    try:
-        serial_handler.initialize()
-    except Exception as e:
-        logging.error("Failed to initialize serial connection. Exiting.")
-        return
+    logging.basicConfig(
+        filename=args.l if args.l else None,
+        level=logging.DEBUG if args.v else logging.INFO,
+        format="%(asctime)s - %(levelname)s - %(message)s"
+    )
 
     latest_values = {
         "extruder": {"temperature": 0.0, "target": 0.0},
         "heater_bed": {"temperature": 0.0, "target": 0.0},
         "gcode_move": {"position": {"x": 0.0, "y": 0.0, "z": 0.0, "e": 0.0}},
         "motion": {"speed_factor": 100.0, "extrude_factor": 100.0},
-        "steps": {"x": 0.0, "y": 0.0, "z": 0.0, "e": 0.0},
-        "feedrates": {"x": 0.0, "y": 0.0, "z": 0.0, "e": 0.0},
-        "acceleration": 0.0,
-        "soft_endstops": "enabled"
+        "steps": {"x": 80.0, "y": 80.0, "z": 400.0, "e": 93.0},
+        "feedrates": {"x": 300.0, "y": 300.0, "z": 5.0, "e": 25.0},
+        "acceleration": 500.0,
+        "endstops": {"soft_endstop": "enabled"}
     }
-    message_queue = Queue()
 
-    websocket_handler = WebSocketHandler(args.websocket_url, message_queue, latest_values)
+    serial_handler = SerialHandler(args.p, args.b)
+    websocket_handler = WebSocketHandler(args.w, Queue(), latest_values)
     tft_adapter = TFTAdapter(serial_handler, websocket_handler)
 
-    try:
-        asyncio.run(tft_adapter.run())
-    except KeyboardInterrupt:
-        logging.info("Shutting down gracefully.")
+    serial_handler.initialize()
 
+    await asyncio.gather(
+        websocket_handler.handler(),
+        tft_adapter.serial_reader(),
+        tft_adapter.process_gcode_queue(),
+        tft_adapter.periodic_temperature_update()
+    )
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
