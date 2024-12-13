@@ -11,6 +11,9 @@ TEMPERATURE_RESPONSE_FORMAT = "ok T:{ETemp:.2f} /{ETarget:.2f} B:{BTemp:.2f} /{B
 POSITION_RESPONSE_FORMAT = "X:{x:.2f} Y:{y:.2f} Z:{z:.2f} E:{e:.2f} \nok"
 FEED_RATE_RESPONSE_FORMAT = "FR:{fr:.2f}%\nok"
 FLOW_RATE_RESPONSE_FORMAT = "E0 Flow: {er:.2f}%\nok"
+M503_RESPONSE_FORMAT = "Steps per unit: X:{x:.2f} Y:{y:.2f} Z:{z:.2f} E:{e:.2f}\nMax feedrates: X:{x_feed:.2f} Y:{y_feed:.2f} Z:{z_feed:.2f} E:{e_feed:.2f}\nAcceleration: {acc:.2f}\nok"
+M92_RESPONSE_FORMAT = "ok Steps per unit: X:{x:.2f} Y:{y:.2f} Z:{z:.2f} E:{e:.2f}"
+M211_RESPONSE_FORMAT = "Soft endstops: {state}\nok"
 
 class TFTAdapter:
     def __init__(self, serial_port, baud_rate, websocket_url):
@@ -23,7 +26,11 @@ class TFTAdapter:
             "extruder": {"temperature": 0.0, "target": 0.0},
             "heater_bed": {"temperature": 0.0, "target": 0.0},
             "gcode_move": {"position": {"x": 0.0, "y": 0.0, "z": 0.0, "e": 0.0}},
-            "motion": {"speed_factor": 100.0, "extrude_factor": 100.0}
+            "motion": {"speed_factor": 100.0, "extrude_factor": 100.0},
+            "steps": {"x": 80.0, "y": 80.0, "z": 400.0, "e": 93.0},
+            "feedrates": {"x": 3000.0, "y": 3000.0, "z": 5.0, "e": 25.0},
+            "acceleration": 500.0,
+            "soft_endstops": "enabled"
         }
 
     def initialize_serial(self):
@@ -113,6 +120,14 @@ class TFTAdapter:
                     self.process_feed_rate_command(gcode)
                 elif gcode.startswith("M221"):
                     self.process_flow_rate_command(gcode)
+                elif gcode == "M503":
+                    response = self.format_m503_response()
+                    self.send_to_tft(response)
+                elif gcode.startswith("M92"):
+                    self.process_m92_command(gcode)
+                elif gcode == "M211":
+                    response = self.format_m211_response()
+                    self.send_to_tft(response)
             await asyncio.sleep(0.1)
 
     def parse_gcode_response(self, gcode_response):
@@ -181,6 +196,49 @@ class TFTAdapter:
         except Exception as e:
             logging.error(f"Error processing M221 command: {e}")
 
+    def process_m92_command(self, gcode):
+        try:
+            parts = gcode.split()
+            for part in parts:
+                if part.startswith("X"):
+                    self.latest_values["steps"]["x"] = float(part[1:])
+                elif part.startswith("Y"):
+                    self.latest_values["steps"]["y"] = float(part[1:])
+                elif part.startswith("Z"):
+                    self.latest_values["steps"]["z"] = float(part[1:])
+                elif part.startswith("E"):
+                    self.latest_values["steps"]["e"] = float(part[1:])
+            response = M92_RESPONSE_FORMAT.format(
+                x=self.latest_values["steps"]["x"],
+                y=self.latest_values["steps"]["y"],
+                z=self.latest_values["steps"]["z"],
+                e=self.latest_values["steps"]["e"]
+            )
+            self.send_to_tft(response)
+        except Exception as e:
+            logging.error(f"Error processing M92 command: {e}")
+
+    def format_m503_response(self):
+        steps = self.latest_values["steps"]
+        feedrates = self.latest_values["feedrates"]
+        acceleration = self.latest_values["acceleration"]
+        return M503_RESPONSE_FORMAT.format(
+            x=steps['x'],
+            y=steps['y'],
+            z=steps['z'],
+            e=steps['e'],
+            x_feed=feedrates['x'],
+            y_feed=feedrates['y'],
+            z_feed=feedrates['z'],
+            e_feed=feedrates['e'],
+            acc=acceleration
+        )
+
+    def format_m211_response(self):
+        return M211_RESPONSE_FORMAT.format(
+            state=self.latest_values["soft_endstops"]
+        )
+
     def send_to_tft(self, message):
         try:
             self.serial_connection.write((message + "\n").encode("utf-8"))
@@ -198,11 +256,11 @@ class TFTAdapter:
 
 def parse_args():
     parser = argparse.ArgumentParser(description="TFT Adapter for serial communication and WebSocket interaction.")
-    parser.add_argument('-s', '--serial-port', type=str, default='/dev/ttyS2', help='Serial port for communication')
-    parser.add_argument('-b', '--baud-rate', type=int, default=115200, help='Baud rate for serial communication')
-    parser.add_argument('-w', '--websocket-url', type=str, default='ws://localhost/websocket', help='WebSocket URL')
-    parser.add_argument('-l', '--log-file', type=str, default=None, help='Path to log file (default: stdout)')
-    parser.add_argument('-v', '--verbose', action='store_true', help='Enable verbose (debug) logging')
+    parser.add_argument('-s', '--serial-port', type=str, default='/dev/ttyS2', help='Serial port to use.')
+    parser.add_argument('-b', '--baud-rate', type=int, default=115200, help='Baud rate for serial communication.')
+    parser.add_argument('-w', '--websocket-url', type=str, default='ws://localhost/websocket', help='WebSocket URL for printer connection.')
+    parser.add_argument('-l', '--log-file', type=str, default=None, help='Log file location. If not specified, logs to stdout.')
+    parser.add_argument('-v', '--verbose', action='store_true', help='Enable verbose logging.')
     return parser.parse_args()
 
 def setup_logging(log_file, verbose):
