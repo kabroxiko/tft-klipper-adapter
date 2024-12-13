@@ -6,6 +6,12 @@ from queue import Queue
 from websockets import connect
 import serial
 
+# Global response formats
+TEMPERATURE_RESPONSE_FORMAT = "ok T:{ETemp:.2f} /{ETarget:.2f} B:{BTemp:.2f} /{BTarget:.2f} @:0 B@:0"
+POSITION_RESPONSE_FORMAT = "X:{x:.2f} Y:{y:.2f} Z:{z:.2f} E:{e:.2f} \nok"
+FEED_RATE_RESPONSE_FORMAT = "FR:{fr:.2f}%\nok"
+FLOW_RATE_RESPONSE_FORMAT = "E0 Flow: {er:.2f}%\nok"
+
 class TFTAdapter:
     def __init__(self, serial_port, baud_rate, websocket_url):
         self.serial_port = serial_port
@@ -75,7 +81,12 @@ class TFTAdapter:
     def send_status_update_to_tft(self):
         extruder = self.latest_values["extruder"]
         heater_bed = self.latest_values["heater_bed"]
-        temperature_status = f"ok T:{extruder['temperature']:.2f} /{extruder['target']:.2f} B:{heater_bed['temperature']:.2f} /{heater_bed['target']:.2f} @:0 B@:0"
+        temperature_status = TEMPERATURE_RESPONSE_FORMAT.format(
+            ETemp=extruder['temperature'],
+            ETarget=extruder['target'],
+            BTemp=heater_bed['temperature'],
+            BTarget=heater_bed['target']
+        )
         self.send_to_tft(temperature_status)
 
     async def serial_reader(self):
@@ -117,7 +128,12 @@ class TFTAdapter:
                     ETemp = float(comp.split(":")[1])
                     if i + 1 < len(components) and components[i + 1].startswith("/"):
                         ETarget = float(components[i + 1][1:])
-            return f"ok T:{ETemp:.2f} /{ETarget:.2f} B:{BTemp:.2f} /{BTarget:.2f} @:0 B@:0"
+            return TEMPERATURE_RESPONSE_FORMAT.format(
+                ETemp=ETemp,
+                ETarget=ETarget,
+                BTemp=BTemp,
+                BTarget=BTarget
+            )
         except Exception as e:
             logging.error(f"Error parsing G-code response: {e}")
             return None
@@ -125,11 +141,21 @@ class TFTAdapter:
     def format_temperature_response(self):
         extruder = self.latest_values["extruder"]
         heater_bed = self.latest_values["heater_bed"]
-        return f"ok T:{extruder['temperature']:.2f} /{extruder['target']:.2f} B:{heater_bed['temperature']:.2f} /{heater_bed['target']:.2f} @:0 B@:0"
+        return TEMPERATURE_RESPONSE_FORMAT.format(
+            ETemp=extruder['temperature'],
+            ETarget=extruder['target'],
+            BTemp=heater_bed['temperature'],
+            BTarget=heater_bed['target']
+        )
 
     def format_position_response(self):
         position = self.latest_values["gcode_move"]["position"]
-        return f"X:{position['x']:.2f} Y:{position['y']:.2f} Z:{position['z']:.2f} E:{position['e']:.2f} \nok"
+        return POSITION_RESPONSE_FORMAT.format(
+            x=position['x'],
+            y=position['y'],
+            z=position['z'],
+            e=position['e']
+        )
 
     def process_feed_rate_command(self, gcode):
         try:
@@ -139,7 +165,7 @@ class TFTAdapter:
                 if part.startswith("S"):
                     feed_rate = float(part[1:])
             self.latest_values["motion"]["speed_factor"] = feed_rate
-            self.send_to_tft(f"ok F:{feed_rate:.2f}%")
+            self.send_to_tft(FEED_RATE_RESPONSE_FORMAT.format(fr=feed_rate))
         except Exception as e:
             logging.error(f"Error processing M220 command: {e}")
 
@@ -151,7 +177,7 @@ class TFTAdapter:
                 if part.startswith("S"):
                     flow_rate = float(part[1:])
             self.latest_values["motion"]["extrude_factor"] = flow_rate
-            self.send_to_tft(f"ok R:{flow_rate:.2f}%")
+            self.send_to_tft(FLOW_RATE_RESPONSE_FORMAT.format(er=flow_rate))
         except Exception as e:
             logging.error(f"Error processing M221 command: {e}")
 
