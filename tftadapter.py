@@ -14,6 +14,10 @@ FLOW_RATE_RESPONSE_FORMAT = "E0 Flow: {er:.2f}%\nok"
 M503_RESPONSE_FORMAT = "Steps per unit: X:{x:.2f} Y:{y:.2f} Z:{z:.2f} E:{e:.2f}\nMax feedrates: X:{x_feed:.2f} Y:{y_feed:.2f} Z:{z_feed:.2f} E:{e_feed:.2f}\nAcceleration: {acc:.2f}\nok"
 M92_RESPONSE_FORMAT = "ok Steps per unit: X:{x:.2f} Y:{y:.2f} Z:{z:.2f} E:{e:.2f}"
 M211_RESPONSE_FORMAT = "Soft endstops: {state}\nok"
+G28_RESPONSE_FORMAT = "ok Homing done\n"
+
+# Whitelist of Marlin-compatible G-codes
+MOONRAKER_COMPATIBLE_GCODES = {"M105", "M114", "M220", "M221", "M503", "M92", "M211", "G28"}
 
 class SerialHandler:
     def __init__(self, serial_port, baud_rate):
@@ -43,13 +47,22 @@ class SerialHandler:
 
 
 class WebSocketHandler:
-    def __init__(self, websocket_url, message_queue, latest_values):
+    def __init__(self, websocket_url, message_queue):
         self.websocket_url = websocket_url
         self.message_queue = message_queue
-        self.latest_values = latest_values
+        self.latest_values = {
+            "extruder": {"temperature": 0.0, "target": 0.0},
+            "heater_bed": {"temperature": 0.0, "target": 0.0},
+            "gcode_move": {"position": {"x": 0.0, "y": 0.0, "z": 0.0, "e": 0.0}},
+            "motion": {"speed_factor": 100.0, "extrude_factor": 100.0},
+            "steps": {"x": 80.0, "y": 80.0, "z": 400.0, "e": 93.0},
+            "feedrates": {"x": 3000.0, "y": 3000.0, "z": 5.0, "e": 25.0},
+            "acceleration": 500.0
+        }
 
     async def handler(self):
         async with connect(self.websocket_url) as websocket:
+            await self.query_printer_objects(websocket)
             await self.subscribe_to_printer_objects(websocket)
             while True:
                 try:
@@ -57,6 +70,27 @@ class WebSocketHandler:
                     self.handle_message(message)
                 except Exception as e:
                     logging.error(f"Error in WebSocket handler: {e}")
+
+    async def query_printer_objects(self, websocket):
+        query_message = json.dumps({
+            "jsonrpc": "2.0",
+            "method": "printer.objects.query",
+            "params": {
+                "objects": {
+                    "extruder": ["temperature", "target"],
+                    "heater_bed": ["temperature", "target"],
+                    "gcode_move": ["position"],
+                    "motion": ["speed_factor", "extrude_factor"],
+                    "toolhead": ["homed_axes"],
+                    "stepper": ["steps"]
+                }
+            },
+            "id": 1
+        })
+        await websocket.send(query_message)
+        response = await websocket.recv()
+        self.update_latest_values(json.loads(response).get("result", {}))
+        logging.info("Queried initial printer object values.")
 
     async def subscribe_to_printer_objects(self, websocket):
         subscription_message = json.dumps({
@@ -67,7 +101,8 @@ class WebSocketHandler:
                     "extruder": None,
                     "heater_bed": None,
                     "gcode_move": None,
-                    "motion": None
+                    "motion": None,
+                    "toolhead": None
                 }
             }
         })
@@ -109,9 +144,12 @@ class TFTAdapter:
             if not self.gcode_queue.empty():
                 gcode = self.gcode_queue.get()
                 logging.info(f"Processing G-code: {gcode}")
-                response = self.handle_gcode(gcode)
-                if response:
-                    self.serial_handler.write_response(response)
+                if gcode.split()[0] in MOONRAKER_COMPATIBLE_GCODES:
+                    response = self.handle_gcode(gcode)
+                    if response:
+                        self.serial_handler.write_response(response)
+                else:
+                    logging.warning(f"G-code {gcode} is not in the whitelist and will not be processed.")
             await asyncio.sleep(0.1)
 
     async def periodic_temperature_update(self):
@@ -136,6 +174,8 @@ class TFTAdapter:
             return self.process_m92_command(gcode)
         elif gcode == "M211":
             return self.format_m211_response()
+        elif gcode == "G28":
+            return self.process_g28_command()
         return None
 
     def format_temperature_response(self):
@@ -176,67 +216,55 @@ class TFTAdapter:
         return FLOW_RATE_RESPONSE_FORMAT.format(er=flow_rate)
 
     def format_m503_response(self):
-        values = self.websocket_handler.latest_values
-        steps = values["steps"]
-        feedrates = values["feedrates"]
-        acceleration = values["acceleration"]
+        steps = self.websocket_handler.latest_values["steps"]
+        feedrates = self.websocket_handler.latest_values["feedrates"]
+        acceleration = self.websocket_handler.latest_values["acceleration"]
+
         return M503_RESPONSE_FORMAT.format(
-            x=steps['x'], y=steps['y'], z=steps['z'], e=steps['e'],
-            x_feed=feedrates['x'], y_feed=feedrates['y'],
-            z_feed=feedrates['z'], e_feed=feedrates['e'],
+            x=steps["x"],
+            y=steps["y"],
+            z=steps["z"],
+            e=steps["e"],
+            x_feed=feedrates["x"],
+            y_feed=feedrates["y"],
+            z_feed=feedrates["z"],
+            e_feed=feedrates["e"],
             acc=acceleration
         )
 
     def process_m92_command(self, gcode):
-        parts = gcode.split()
-        values = self.websocket_handler.latest_values["steps"]
-        for part in parts:
-            if part.startswith("X"):
-                values["x"] = float(part[1:])
-            elif part.startswith("Y"):
-                values["y"] = float(part[1:])
-            elif part.startswith("Z"):
-                values["z"] = float(part[1:])
-            elif part.startswith("E"):
-                values["e"] = float(part[1:])
+        steps = self.websocket_handler.latest_values["steps"]
         return M92_RESPONSE_FORMAT.format(
-            x=values["x"], y=values["y"], z=values["z"], e=values["e"]
+            x=steps["x"],
+            y=steps["y"],
+            z=steps["z"],
+            e=steps["e"]
         )
 
     def format_m211_response(self):
-        state = self.websocket_handler.latest_values.get("endstops", {}).get("soft_endstop", "disabled")
+        state = "On"  # Replace with actual logic to determine soft endstops state
         return M211_RESPONSE_FORMAT.format(state=state)
 
+    def process_g28_command(self):
+        # Simulate homing process
+        return G28_RESPONSE_FORMAT
 
 async def main():
-    parser = argparse.ArgumentParser(description="TFT Adapter for Klipper")
-    parser.add_argument("-p", help="Serial port", required=True)
-    parser.add_argument("-b", help="Baud rate", type=int, default=115200)
-    parser.add_argument("-w", help="WebSocket URL", required=True)
-    parser.add_argument("-l", help="Log file location", default=None)
-    parser.add_argument("-v", help="Verbose mode", action="store_true")
-
+    parser = argparse.ArgumentParser(description="TFT Adapter for Moonraker and Artillery TFT.")
+    parser.add_argument("-p", "--serial_port", type=str, default="/dev/ttyS2", help="Serial port for TFT communication.")
+    parser.add_argument("-b", "--baud_rate", type=int, default=115200, help="Baud rate for serial communication.")
+    parser.add_argument("-w", "--websocket_url", type=str, default="ws://127.0.0.1:7125/websocket", help="WebSocket URL for Moonraker.")
+    parser.add_argument("-l", "--log_file", type=str, default=None, help="Log file location. If not specified, logs to stdout.")
+    parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose logging.")
     args = parser.parse_args()
 
-    logging.basicConfig(
-        filename=args.l if args.l else None,
-        level=logging.DEBUG if args.v else logging.INFO,
-        format="%(asctime)s - %(levelname)s - %(message)s"
-    )
+    log_level = logging.DEBUG if args.verbose else logging.INFO
+    logging.basicConfig(level=log_level, format="%(asctime)s - %(levelname)s - %(message)s",
+                        filename=args.log_file, filemode='a' if args.log_file else None)
 
-    latest_values = {
-        "extruder": {"temperature": 0.0, "target": 0.0},
-        "heater_bed": {"temperature": 0.0, "target": 0.0},
-        "gcode_move": {"position": {"x": 0.0, "y": 0.0, "z": 0.0, "e": 0.0}},
-        "motion": {"speed_factor": 100.0, "extrude_factor": 100.0},
-        "steps": {"x": 80.0, "y": 80.0, "z": 400.0, "e": 93.0},
-        "feedrates": {"x": 300.0, "y": 300.0, "z": 5.0, "e": 25.0},
-        "acceleration": 500.0,
-        "endstops": {"soft_endstop": "enabled"}
-    }
-
-    serial_handler = SerialHandler(args.p, args.b)
-    websocket_handler = WebSocketHandler(args.w, Queue(), latest_values)
+    message_queue = Queue()
+    serial_handler = SerialHandler(args.serial_port, args.baud_rate)
+    websocket_handler = WebSocketHandler(args.websocket_url, message_queue)
     tft_adapter = TFTAdapter(serial_handler, websocket_handler)
 
     serial_handler.initialize()
