@@ -80,20 +80,32 @@ def convert_to_marlin(response):
         logging.error(f"Error in response conversion: {e}")
         return f"Error in response conversion: {str(e)}"
 
-def read_gcodes_from_serial(serial_conn, gcode_queue):
-    while True:
-        try:
-            line = serial_conn.readline().decode("utf-8").strip()
-            if line:
-                logging.info(f"Received G-code from serial: {line}")
-                # Add G-code to the queue (using asyncio thread-safe method)
-                gcode_queue.put_nowait(line)
-                logging.info("G-code added to queue")
-        except Exception as e:
-            logging.error(f"Error reading serial: {e}")
-            break
+class SerialHandler:
+    def __init__(self, port, baud_rate):
+        self.serial_conn = serial.Serial(port, baud_rate, timeout=1)
+        logging.info(f"Connected to serial device at {port} with baud rate {baud_rate}")
 
-async def moonraker_client(gcode_queue, serial_conn):
+    def read_gcodes(self, gcode_queue):
+        while True:
+            try:
+                line = self.serial_conn.readline().decode("utf-8").strip()
+                if line:
+                    logging.info(f"Received G-code from serial: {line}")
+                    # Add G-code to the queue (using asyncio thread-safe method)
+                    gcode_queue.put_nowait(line)
+                    logging.info("G-code added to queue")
+            except Exception as e:
+                logging.error(f"Error reading serial: {e}")
+                break
+
+    def write_to_serial(self, message):
+        try:
+            self.serial_conn.write(f"{message}\n".encode())
+            logging.info(f"Sent to serial: {message}")
+        except Exception as e:
+            logging.error(f"Error writing to serial: {e}")
+
+async def moonraker_client(gcode_queue, serial_handler):
     async with websockets.connect(MOONRAKER_URL) as websocket:
         logging.info("Connected to Moonraker WebSocket")
 
@@ -141,8 +153,7 @@ async def moonraker_client(gcode_queue, serial_conn):
                     # Handle the response and send to TFT
                     marlin_response = convert_to_marlin(data)
                     if marlin_response:
-                        serial_conn.write(f"{marlin_response}\n".encode())
-                        logging.info(f"Sent response back to TFT: {marlin_response}")
+                        serial_handler.write_to_serial(marlin_response)
 
                 except asyncio.TimeoutError:
                     pass
@@ -158,23 +169,22 @@ async def moonraker_client(gcode_queue, serial_conn):
 
 def main():
     try:
-        # Open the serial connection
-        serial_conn = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=1)
-        logging.info(f"Connected to serial device at {SERIAL_PORT} with baud rate {BAUD_RATE}")
+        # Create the SerialHandler instance
+        serial_handler = SerialHandler(SERIAL_PORT, BAUD_RATE)
 
         # Create a thread-safe asyncio queue
         gcode_queue = asyncio.Queue()
 
         # Start a thread to read from the serial port
         serial_thread = threading.Thread(
-            target=read_gcodes_from_serial,
-            args=(serial_conn, gcode_queue),
+            target=serial_handler.read_gcodes,
+            args=(gcode_queue,),
             daemon=True
         )
         serial_thread.start()
 
         # Run the Moonraker WebSocket client
-        asyncio.run(moonraker_client(gcode_queue, serial_conn))
+        asyncio.run(moonraker_client(gcode_queue, serial_handler))
     except Exception as e:
         logging.critical(f"Critical error: {e}")
 
