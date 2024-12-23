@@ -11,13 +11,27 @@ TEMPERATURE_RESPONSE_FORMAT = "ok T:{ETemp:.2f} /{ETarget:.2f} B:{BTemp:.2f} /{B
 POSITION_RESPONSE_FORMAT = "X:{x:.2f} Y:{y:.2f} Z:{z:.2f} E:{e:.2f} \nok"
 FEED_RATE_RESPONSE_FORMAT = "FR:{fr:.2f}%\nok"
 FLOW_RATE_RESPONSE_FORMAT = "E0 Flow: {er:.2f}%\nok"
-M503_RESPONSE_FORMAT = "Steps per unit: X:{x:.2f} Y:{y:.2f} Z:{z:.2f} E:{e:.2f}\nMax feedrates: X:{x_feed:.2f} Y:{y_feed:.2f} Z:{z_feed:.2f} E:{e_feed:.2f}\nAcceleration: {acc:.2f}\nok"
-M92_RESPONSE_FORMAT = "ok Steps per unit: X:{x:.2f} Y:{y:.2f} Z:{z:.2f} E:{e:.2f}"
+M503_M203_FORMAT = "M203 X{toolhead_max_velocity} Y{toolhead_max_velocity} Z{max_z_velocity} E{max_extrude_only_velocity}"
+M503_M201_FORMAT = "M201 X{toolhead_max_accel} Y{toolhead_max_accel} Z{max_z_accel} E{max_extrude_only_accel}"
+M503_M206_FORMAT = "M206 X{homing_origin_x} Y{homing_origin_y} Z{homing_origin_z}"
+M503_M851_FORMAT = "M851 X{bltouch_x_offset} Y{bltouch_y_offset} Z{bltouch_x_offset}"
+M503_M420_FORMAT = "M420 S1 Z{bed_mesh_fade_end}"
+M503_M106_FORMAT = "M106 S{fan_speed}"
 M211_RESPONSE_FORMAT = "Soft endstops: {state}\nok"
 G28_RESPONSE_FORMAT = "ok Homing done\n"
 
+OBJECTS = {
+    "extruder": ["temperature", "target"],
+    "heater_bed": ["temperature", "target"],
+    "gcode_move": ["position", "homing_origin", "speed_factor", "extrude_factor"],
+    "toolhead": ["max_velocity", "max_accel"],
+    "mcu": ["mcu_version"],
+    "configfile": ["settings"],
+    "fan": ["speed"]
+}
+
 # Whitelist of Marlin-compatible G-codes
-MOONRAKER_COMPATIBLE_GCODES = {"M105", "M114", "M220", "M221", "M503", "M92", "M211", "G28"}
+MOONRAKER_COMPATIBLE_GCODES = {"M105", "M114", "M115", "M220", "M221", "M503", "M92", "M211", "G28"}
 
 class SerialHandler:
     def __init__(self, serial_port, baud_rate):
@@ -50,60 +64,41 @@ class WebSocketHandler:
     def __init__(self, websocket_url, message_queue):
         self.websocket_url = websocket_url
         self.message_queue = message_queue
-        self.latest_values = {
-            "extruder": {"temperature": 0.0, "target": 0.0},
-            "heater_bed": {"temperature": 0.0, "target": 0.0},
-            "gcode_move": {"position": {"x": 0.0, "y": 0.0, "z": 0.0, "e": 0.0}},
-            "motion": {"speed_factor": 100.0, "extrude_factor": 100.0},
-            "steps": {"x": 80.0, "y": 80.0, "z": 400.0, "e": 93.0},
-            "feedrates": {"x": 3000.0, "y": 3000.0, "z": 5.0, "e": 25.0},
-            "acceleration": 500.0
-        }
+        self.latest_values = {}  # Start with an empty dictionary
 
-    async def handler(self):
-        async with connect(self.websocket_url) as websocket:
-            await self.query_printer_objects(websocket)
-            await self.subscribe_to_printer_objects(websocket)
-            while True:
-                try:
-                    message = await websocket.recv()
-                    self.handle_message(message)
-                except Exception as e:
-                    logging.error(f"Error in WebSocket handler: {e}")
+    async def handler(self, websocket):
+        await self.subscribe_to_printer_objects(websocket)
+        while True:
+            try:
+                message = await websocket.recv()
+                self.handle_message(message)
+            except Exception as e:
+                logging.error(f"Error in WebSocket handler: {e}")
 
-    async def query_printer_objects(self, websocket):
+    async def initialize_values(self, websocket):
         query_message = json.dumps({
             "jsonrpc": "2.0",
             "method": "printer.objects.query",
             "params": {
-                "objects": {
-                    "extruder": ["temperature", "target"],
-                    "heater_bed": ["temperature", "target"],
-                    "gcode_move": ["position"],
-                    "motion": ["speed_factor", "extrude_factor"],
-                    "toolhead": ["homed_axes"],
-                    "stepper": ["steps"]
-                }
+                "objects": OBJECTS
             },
             "id": 1
         })
         await websocket.send(query_message)
-        response = await websocket.recv()
-        self.update_latest_values(json.loads(response).get("result", {}))
-        logging.info("Queried initial printer object values.")
+        result = None
+        while result is None:
+            response = await websocket.recv()
+            result = json.loads(response).get("result")
+        logging.info(f"result: {result}")
+        self.latest_values = result.get("status")
+        logging.info("Initialized latest values from printer.")
 
     async def subscribe_to_printer_objects(self, websocket):
         subscription_message = json.dumps({
             "jsonrpc": "2.0",
             "method": "printer.objects.subscribe",
             "params": {
-                "objects": {
-                    "extruder": None,
-                    "heater_bed": None,
-                    "gcode_move": None,
-                    "motion": None,
-                    "toolhead": None
-                }
+                "objects": OBJECTS
             }
         })
         await websocket.send(subscription_message)
@@ -136,14 +131,16 @@ class WebSocketHandler:
     def handle_message(self, message):
         try:
             data = json.loads(message)
-            if "method" in data and data["method"] == "notify_status_update":
-                self.update_latest_values(data.get("params", [{}])[0])
-            elif "method" in data and data["method"] == "notify_gcode_response":
-                self.message_queue.put(data["params"][0])
+            if data is not None:
+                if data.get("method") == "notify_status_update":
+                    self.update_latest_values(data.get("params")[0])
+                elif data.get("method") == "notify_gcode_response":
+                    self.message_queue.put(data["params"][0])
         except Exception as e:
             logging.error(f"Error processing WebSocket message: {e}")
 
     def update_latest_values(self, updates):
+        logging.debug(f"Update latest_values: {updates}")
         for key, values in updates.items():
             if key in self.latest_values:
                 self.latest_values[key].update(values)
@@ -195,9 +192,11 @@ class TFTAdapter:
         elif gcode == "M503":
             return self.format_m503_response()
         elif gcode.startswith("M92"):
-            return self.process_m92_command(gcode)
+            return "ok"
         elif gcode == "M211":
             return self.format_m211_response()
+        elif gcode == "M115":
+            return self.format_m115_response()
         elif gcode.startswith("G28"):
             return await self.websocket_handler.send_gcode_and_wait(gcode)
         return None
@@ -215,55 +214,50 @@ class TFTAdapter:
     def format_position_response(self):
         position = self.websocket_handler.latest_values["gcode_move"]["position"]
         return POSITION_RESPONSE_FORMAT.format(
-            x=position['x'],
-            y=position['y'],
-            z=position['z'],
-            e=position['e']
+            x=position[0],
+            y=position[1],
+            z=position[2],
+            e=position[3]
         )
 
     def process_feed_rate_command(self, gcode):
-        parts = gcode.split()
-        feed_rate = 100.0
-        for part in parts:
-            if part.startswith("S"):
-                feed_rate = float(part[1:])
-        self.websocket_handler.latest_values["motion"]["speed_factor"] = feed_rate
-        return FEED_RATE_RESPONSE_FORMAT.format(fr=feed_rate)
+        return FEED_RATE_RESPONSE_FORMAT.format(fr=self.websocket_handler.latest_values["gcode_move"]["speed_factor"] * 100)
 
     def process_flow_rate_command(self, gcode):
-        parts = gcode.split()
-        flow_rate = 100.0
-        for part in parts:
-            if part.startswith("S"):
-                flow_rate = float(part[1:])
-        self.websocket_handler.latest_values["motion"]["extrude_factor"] = flow_rate
-        return FLOW_RATE_RESPONSE_FORMAT.format(er=flow_rate)
+        return FLOW_RATE_RESPONSE_FORMAT.format(er=self.websocket_handler.latest_values["gcode_move"]["extrude_factor"] * 100)
 
     def format_m503_response(self):
-        steps = self.websocket_handler.latest_values["steps"]
-        feedrates = self.websocket_handler.latest_values["feedrates"]
-        acceleration = self.websocket_handler.latest_values["acceleration"]
+        # Access the latest values from the WebSocket
+        toolhead = self.websocket_handler.latest_values["toolhead"]
+        config = self.websocket_handler.latest_values["configfile"]["settings"]
+        gcode_move = self.websocket_handler.latest_values["gcode_move"]
+        fan = self.websocket_handler.latest_values["fan"]
 
-        return M503_RESPONSE_FORMAT.format(
-            x=steps["x"],
-            y=steps["y"],
-            z=steps["z"],
-            e=steps["e"],
-            x_feed=feedrates["x"],
-            y_feed=feedrates["y"],
-            z_feed=feedrates["z"],
-            e_feed=feedrates["e"],
-            acc=acceleration
-        )
+        # Format the M503 response using the global variables
+        return M503_M203_FORMAT.format(
+            toolhead_max_velocity=toolhead["max_velocity"],
+            max_z_velocity=config["printer"]["max_z_velocity"],
+            max_extrude_only_velocity=config["extruder"]["max_extrude_only_velocity"]
+        ) + "\n" + M503_M201_FORMAT.format(
+            toolhead_max_accel=toolhead["max_accel"],
+            max_z_accel=config["printer"]["max_z_accel"],
+            max_extrude_only_accel=config["extruder"]["max_extrude_only_accel"]
+        ) + "\n" + M503_M206_FORMAT.format(
+            homing_origin_x=gcode_move["homing_origin"][0],
+            homing_origin_y=gcode_move["homing_origin"][1],
+            homing_origin_z=gcode_move["homing_origin"][2]
+        ) + "\n" + M503_M851_FORMAT.format(
+            bltouch_x_offset=config["bltouch"]["x_offset"],
+            bltouch_y_offset=config["bltouch"]["y_offset"]
+        ) + "\n" + M503_M420_FORMAT.format(
+            bed_mesh_fade_end=config["bed_mesh"]["fade_end"]
+        ) + "\n" + M503_M106_FORMAT.format(
+            fan_speed=fan["speed"] * 255.0  # Convert fan speed to PWM value
+        ) + "\nok"
 
-    def process_m92_command(self, gcode):
-        steps = self.websocket_handler.latest_values["steps"]
-        return M92_RESPONSE_FORMAT.format(
-            x=steps["x"],
-            y=steps["y"],
-            z=steps["z"],
-            e=steps["e"]
-        )
+    def format_m115_response(self):
+        mcu_version = self.websocket_handler.latest_values["mcu"]["mcu_version"]
+        return f"FIRMWARE_NAME:Klipper {mcu_version} SOURCE_CODE_URL:https://github.com/Klipper3d/klipper PROTOCOL_VERSION:1.0 MACHINE_TYPE:Sidewinder X2\nok"
 
     def format_m211_response(self):
         state = "On"  # Replace with actual logic to determine soft endstops state
@@ -293,12 +287,14 @@ async def main():
 
     serial_handler.initialize()
 
-    await asyncio.gather(
-        websocket_handler.handler(),
-        tft_adapter.serial_reader(),
-        tft_adapter.process_gcode_queue(),
-        tft_adapter.periodic_temperature_update()
-    )
+    async with connect(args.websocket_url) as websocket:
+        await websocket_handler.initialize_values(websocket)
+        await asyncio.gather(
+            websocket_handler.handler(websocket),
+            tft_adapter.serial_reader(),
+            tft_adapter.process_gcode_queue(),
+            tft_adapter.periodic_temperature_update()
+        )
 
 if __name__ == "__main__":
     asyncio.run(main())
