@@ -31,7 +31,7 @@ OBJECTS = {
 }
 
 # Whitelist of Marlin-compatible G-codes
-MOONRAKER_COMPATIBLE_GCODES = {"M105", "M114", "M115", "M220", "M221", "M503", "M92", "M211", "G28"}
+MOONRAKER_COMPATIBLE_GCODES = {"M105", "M114", "M115", "M220", "M221", "M503", "M92", "M211", "G28", "G90", "M82"}
 
 class SerialHandler:
     def __init__(self, serial_port, baud_rate):
@@ -197,7 +197,7 @@ class TFTAdapter:
             return self.format_m211_response()
         elif gcode == "M115":
             return self.format_m115_response()
-        elif gcode.startswith("G28"):
+        elif gcode.startswith("G28") or gcode.startswith("G90") or gcode.startswith("M82"):
             return await self.websocket_handler.send_gcode_and_wait(gcode)
         return None
 
