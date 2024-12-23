@@ -198,7 +198,7 @@ class TFTAdapter:
             return self.process_m92_command(gcode)
         elif gcode == "M211":
             return self.format_m211_response()
-        elif gcode == "G28":
+        elif gcode.startswith("G28"):
             return await self.websocket_handler.send_gcode_and_wait(gcode)
         return None
 
