@@ -23,7 +23,25 @@ M115_RESPONSE_FORMAT = (
     "FIRMWARE_NAME:Klipper {mcu_version} "
     "SOURCE_CODE_URL:https://github.com/Klipper3d/klipper "
     "PROTOCOL_VERSION:1.0 "
-    "MACHINE_TYPE:Sidewinder X2"
+    "MACHINE_TYPE:Sidewinder X2\n"
+    "Cap:EEPROM:1\n"
+    "Cap:AUTOREPORT_TEMP:1\n"
+    "Cap:AUTOREPORT_POS:1\n"
+    "Cap:AUTOLEVEL:1\n"
+    "Cap:Z_PROBE:1\n"
+    "Cap:LEVELING_DATA:0\n"
+    "Cap:SOFTWARE_POWER:0\n"
+    "Cap:TOGGLE_LIGHTS:0\n"
+    "Cap:CASE_LIGHT_BRIGHTNESS:0\n"
+    "Cap:EMERGENCY_PARSER:1\n"
+    "Cap:PROMPT_SUPPORT:0\n"
+    "Cap:SDCARD:1\n"
+    "Cap:MULTI_VOLUME:0\n"
+    "Cap:AUTOREPORT_SD_STATUS:1\n"
+    "Cap:LONG_FILENAME:1\n"
+    "Cap:BABYSTEPPING:1\n"
+    "Cap:BUILD_PERCENT:1\n"
+    "Cap:CHAMBER_TEMPERATURE:0"
 )
 
 OBJECTS = {
@@ -37,7 +55,21 @@ OBJECTS = {
 }
 
 # Whitelist of Marlin-compatible G-codes
-MOONRAKER_COMPATIBLE_GCODES = {"M105", "M114", "M115", "M220", "M221", "M503", "M92", "M211", "G28", "G90", "M82"}
+MOONRAKER_COMPATIBLE_GCODES = {
+    "M105",
+    "M114",
+    "M115",
+    "M154",
+    "M155",
+    "M220",
+    "M221",
+    "M503",
+    "M92",
+    "M211",
+    "G28",
+    "G90",
+    "M82"
+}
 
 class SerialHandler:
     def __init__(self, serial_port, baud_rate):
@@ -179,6 +211,13 @@ class TFTAdapter:
                     logging.warning(f"G-code {gcode} is not in the whitelist and will not be processed.")
             await asyncio.sleep(0.1)
 
+    async def periodic_position_update(self):
+        while True:
+            response = self.format_position_response()
+            if response:
+                self.serial_handler.write_response(response)
+            await asyncio.sleep(3)
+
     async def periodic_temperature_update(self):
         while True:
             response = self.format_temperature_response()
@@ -189,6 +228,10 @@ class TFTAdapter:
     async def handle_gcode(self, gcode):
         if gcode == "M105":
             return self.format_temperature_response()
+        elif gcode.startswith("M154"):
+            return "ok"
+        elif gcode.startswith("M155"):
+            return "ok"
         elif gcode == "M114":
             return self.format_position_response()
         elif gcode.startswith("M220"):
@@ -299,7 +342,8 @@ async def main():
             websocket_handler.handler(websocket),
             tft_adapter.serial_reader(),
             tft_adapter.process_gcode_queue(),
-            tft_adapter.periodic_temperature_update()
+            tft_adapter.periodic_temperature_update(),
+            tft_adapter.periodic_position_update()
         )
 
 if __name__ == "__main__":
