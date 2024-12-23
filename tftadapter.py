@@ -26,25 +26,25 @@ latest_values = {
     "heater_bed": {"temperature": 0.0, "target": 0.0},
 }
 
-# Global temperature format
+# Global Temperature Format
 TEMPERATURE_FORMAT = f"ok T:{{ETemp:.2f}} /{{ETarget:.2f}} B:{{BTemp:.2f}} /{{BTarget:.2f}} @:0 B@:0"
 
 class SerialHandler:
-    def __init__(self, serial_conn):
-        self.serial_conn = serial_conn
+    def __init__(self, port, baud_rate):
+        self.serial_conn = serial.Serial(port, baud_rate, timeout=1)
 
     def read_line(self):
         try:
             line = self.serial_conn.readline().decode("utf-8").strip()
             return line
         except Exception as e:
-            logging.error(f"Error reading serial: {e}")
+            logging.error(f"Error reading from serial: {e}")
             return None
 
     def write_line(self, line):
         try:
             self.serial_conn.write(f"{line}\n".encode())
-            logging.info(f"Sent response back to TFT: {line}")
+            logging.info(f"Sent to serial: {line}")
         except Exception as e:
             logging.error(f"Error writing to serial: {e}")
 
@@ -179,15 +179,12 @@ async def moonraker_client(gcode_queue, serial_handler):
 
 def main():
     try:
-        # Open the serial connection
-        serial_conn = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=1)
+        # Initialize SerialHandler
+        serial_handler = SerialHandler(SERIAL_PORT, BAUD_RATE)
         logging.info(f"Connected to serial device at {SERIAL_PORT} with baud rate {BAUD_RATE}")
 
         # Create a thread-safe asyncio queue
         gcode_queue = asyncio.Queue()
-
-        # Create SerialHandler instance
-        serial_handler = SerialHandler(serial_conn)
 
         # Start a thread to read from the serial port
         serial_thread = threading.Thread(
