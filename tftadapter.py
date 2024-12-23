@@ -26,6 +26,28 @@ latest_values = {
     "heater_bed": {"temperature": 0.0, "target": 0.0},
 }
 
+# Global temperature format
+TEMPERATURE_FORMAT = f"ok T:{{ETemp:.2f}} /{{ETarget:.2f}} B:{{BTemp:.2f}} /{{BTarget:.2f}} @:0 B@:0"
+
+class SerialHandler:
+    def __init__(self, serial_conn):
+        self.serial_conn = serial_conn
+
+    def read_line(self):
+        try:
+            line = self.serial_conn.readline().decode("utf-8").strip()
+            return line
+        except Exception as e:
+            logging.error(f"Error reading serial: {e}")
+            return None
+
+    def write_line(self, line):
+        try:
+            self.serial_conn.write(f"{line}\n".encode())
+            logging.info(f"Sent response back to TFT: {line}")
+        except Exception as e:
+            logging.error(f"Error writing to serial: {e}")
+
 def convert_to_marlin(response):
     """
     Convert a Moonraker response to a Marlin-compatible format.
@@ -71,7 +93,7 @@ def convert_to_marlin(response):
                 BTemp = heater_bed["temperature"]
                 BTarget = heater_bed["target"]
 
-                return f"ok T:{ETemp:.2f} /{ETarget:.2f} B:{BTemp:.2f} /{BTarget:.2f} @:0 B@:0"
+                return TEMPERATURE_FORMAT.format(ETemp=ETemp, ETarget=ETarget, BTemp=BTemp, BTarget=BTarget)
 
         # Handle unexpected or unknown structures
         return f"Unknown response: {json.dumps(response)}"
@@ -80,37 +102,18 @@ def convert_to_marlin(response):
         logging.error(f"Error in response conversion: {e}")
         return f"Error in response conversion: {str(e)}"
 
-class SerialHandler:
-    def __init__(self, port, baud_rate, timeout=1):
-        self.serial_conn = serial.Serial(port, baud_rate, timeout=timeout)
-        logging.info(f"Connected to serial device at {port} with baud rate {baud_rate}")
-
-    def read_line(self):
-        try:
-            line = self.serial_conn.readline().decode("utf-8").strip()
-            logging.debug(f"Read from serial: {line}")
-            return line
-        except Exception as e:
-            logging.error(f"Error reading from serial: {e}")
-            return None
-
-    def write_line(self, data):
-        try:
-            self.serial_conn.write(f"{data}\n".encode())
-            logging.debug(f"Written to serial: {data}")
-        except Exception as e:
-            logging.error(f"Error writing to serial: {e}")
-
-
 def read_gcodes_from_serial(serial_handler, gcode_queue):
     while True:
-        line = serial_handler.read_line()
-        if line:
-            logging.info(f"Received G-code from serial: {line}")
-            # Add G-code to the queue (using asyncio thread-safe method)
-            gcode_queue.put_nowait(line)
-            logging.info("G-code added to queue")
-
+        try:
+            line = serial_handler.read_line()
+            if line:
+                logging.info(f"Received G-code from serial: {line}")
+                # Add G-code to the queue (using asyncio thread-safe method)
+                gcode_queue.put_nowait(line)
+                logging.info("G-code added to queue")
+        except Exception as e:
+            logging.error(f"Error reading serial: {e}")
+            break
 
 async def moonraker_client(gcode_queue, serial_handler):
     async with websockets.connect(MOONRAKER_URL) as websocket:
@@ -161,7 +164,6 @@ async def moonraker_client(gcode_queue, serial_handler):
                     marlin_response = convert_to_marlin(data)
                     if marlin_response:
                         serial_handler.write_line(marlin_response)
-                        logging.info(f"Sent response back to TFT: {marlin_response}")
 
                 except asyncio.TimeoutError:
                     pass
@@ -177,11 +179,15 @@ async def moonraker_client(gcode_queue, serial_handler):
 
 def main():
     try:
-        # Initialize the serial handler
-        serial_handler = SerialHandler(SERIAL_PORT, BAUD_RATE)
+        # Open the serial connection
+        serial_conn = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=1)
+        logging.info(f"Connected to serial device at {SERIAL_PORT} with baud rate {BAUD_RATE}")
 
         # Create a thread-safe asyncio queue
         gcode_queue = asyncio.Queue()
+
+        # Create SerialHandler instance
+        serial_handler = SerialHandler(serial_conn)
 
         # Start a thread to read from the serial port
         serial_thread = threading.Thread(
