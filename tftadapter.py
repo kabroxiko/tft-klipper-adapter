@@ -19,6 +19,12 @@ M503_M420_FORMAT = "M420 S1 Z{bed_mesh_fade_end}"
 M503_M106_FORMAT = "M106 S{fan_speed}"
 M211_RESPONSE_FORMAT = "Soft endstops: {state}\nok"
 G28_RESPONSE_FORMAT = "ok Homing done\n"
+M115_RESPONSE_FORMAT = (
+    "FIRMWARE_NAME:Klipper {mcu_version} "
+    "SOURCE_CODE_URL:https://github.com/Klipper3d/klipper "
+    "PROTOCOL_VERSION:1.0 "
+    "MACHINE_TYPE:Sidewinder X2"
+)
 
 OBJECTS = {
     "extruder": ["temperature", "target"],
@@ -257,7 +263,7 @@ class TFTAdapter:
 
     def format_m115_response(self):
         mcu_version = self.websocket_handler.latest_values["mcu"]["mcu_version"]
-        return f"FIRMWARE_NAME:Klipper {mcu_version} SOURCE_CODE_URL:https://github.com/Klipper3d/klipper PROTOCOL_VERSION:1.0 MACHINE_TYPE:Sidewinder X2\nok"
+        return M115_RESPONSE_FORMAT.format(mcu_version=mcu_version)
 
     def format_m211_response(self):
         state = "On"  # Replace with actual logic to determine soft endstops state
