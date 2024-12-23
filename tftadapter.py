@@ -109,6 +109,30 @@ class WebSocketHandler:
         await websocket.send(subscription_message)
         logging.info("Subscribed to printer object updates.")
 
+    async def send_gcode_and_wait(self, gcode):
+        """Send a G-code to Moonraker and wait for the response."""
+        # try:
+        message_id = 100  # You can implement an incrementing ID for unique requests
+        gcode_message = json.dumps({
+            "jsonrpc": "2.0",
+            "method": "printer.gcode.script",
+            "params": {"script": gcode},
+            "id": message_id
+        })
+        # Send the G-code
+        async with connect(self.websocket_url) as websocket:
+            await websocket.send(gcode_message)
+
+            # Wait for a response with matching ID
+            while True:
+                response = await websocket.recv()
+                response_data = json.loads(response)
+                if response_data.get("id") == message_id:
+                    return response_data.get("result", {})
+        # except Exception as e:
+        #     logging.error(f"Error sending G-code to Moonraker: {e}")
+        #     return None
+
     def handle_message(self, message):
         try:
             data = json.loads(message)
@@ -145,7 +169,7 @@ class TFTAdapter:
                 gcode = self.gcode_queue.get()
                 logging.info(f"Processing G-code: {gcode}")
                 if gcode.split()[0] in MOONRAKER_COMPATIBLE_GCODES:
-                    response = self.handle_gcode(gcode)
+                    response = await self.handle_gcode(gcode)
                     if response:
                         self.serial_handler.write_response(response)
                 else:
@@ -159,7 +183,7 @@ class TFTAdapter:
                 self.serial_handler.write_response(response)
             await asyncio.sleep(3)
 
-    def handle_gcode(self, gcode):
+    async def handle_gcode(self, gcode):
         if gcode == "M105":
             return self.format_temperature_response()
         elif gcode == "M114":
@@ -175,7 +199,7 @@ class TFTAdapter:
         elif gcode == "M211":
             return self.format_m211_response()
         elif gcode == "G28":
-            return self.process_g28_command()
+            return await self.websocket_handler.send_gcode_and_wait(gcode)
         return None
 
     def format_temperature_response(self):
