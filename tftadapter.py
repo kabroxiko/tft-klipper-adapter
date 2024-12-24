@@ -58,6 +58,7 @@ OBJECTS = {
 MOONRAKER_COMPATIBLE_GCODES = {
     "M20",
     "M21",
+    "M23",
     "M33",
     "M82",
     "M92",
@@ -150,15 +151,6 @@ class WebSocketHandler:
         })
         await websocket.send(subscription_message)
         logging.info("Subscribed to printer object updates.")
-
-        # # Subscribe to notify_filelist_changed
-        # filelist_subscription_message = json.dumps({
-        #     "jsonrpc": "2.0",
-        #     "method": "printer.filelist.subscribe",
-        #     "params": {}
-        # })
-        # await websocket.send(filelist_subscription_message)
-        # logging.info("Subscribed to file list change notifications.")
 
     async def send_gcode_and_wait(self, gcode):
         """Send a G-code to Moonraker and wait for the response."""
@@ -319,9 +311,7 @@ class TFTAdapter:
                 logging.error(f"Error initializing sd card: {response}")
         elif gcode.startswith("M33"):
             return f"{gcode.split(' ')[1]}\nok"
-        elif gcode.startswith("G28") or \
-             gcode.startswith("G90") or \
-             gcode.startswith("M82"):
+        else:
             return await self.websocket_handler.send_gcode_and_wait(gcode)
         return None
 
