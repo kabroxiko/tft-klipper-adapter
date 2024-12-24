@@ -56,19 +56,20 @@ OBJECTS = {
 
 # Whitelist of Marlin-compatible G-codes
 MOONRAKER_COMPATIBLE_GCODES = {
+    "M21",
+    "M82",
+    "M92",
     "M105",
     "M114",
     "M115",
     "M154",
     "M155",
+    "M211",
     "M220",
     "M221",
     "M503",
-    "M92",
-    "M211",
     "G28",
-    "G90",
-    "M82"
+    "G90"
 }
 
 class SerialHandler:
@@ -144,27 +145,27 @@ class WebSocketHandler:
 
     async def send_gcode_and_wait(self, gcode):
         """Send a G-code to Moonraker and wait for the response."""
-        # try:
-        message_id = 100  # You can implement an incrementing ID for unique requests
-        gcode_message = json.dumps({
-            "jsonrpc": "2.0",
-            "method": "printer.gcode.script",
-            "params": {"script": gcode},
-            "id": message_id
-        })
-        # Send the G-code
-        async with connect(self.websocket_url) as websocket:
-            await websocket.send(gcode_message)
+        try:
+            message_id = 100  # You can implement an incrementing ID for unique requests
+            gcode_message = json.dumps({
+                "jsonrpc": "2.0",
+                "method": "printer.gcode.script",
+                "params": {"script": gcode},
+                "id": message_id
+            })
+            # Send the G-code
+            async with connect(self.websocket_url) as websocket:
+                await websocket.send(gcode_message)
 
-            # Wait for a response with matching ID
-            while True:
-                response = await websocket.recv()
-                response_data = json.loads(response)
-                if response_data.get("id") == message_id:
-                    return response_data.get("result", {})
-        # except Exception as e:
-        #     logging.error(f"Error sending G-code to Moonraker: {e}")
-        #     return None
+                # Wait for a response with matching ID
+                while True:
+                    response = await websocket.recv()
+                    response_data = json.loads(response)
+                    if response_data.get("id") == message_id:
+                        return response_data.get("result", {})
+        except Exception as e:
+            logging.error(f"Error sending G-code to Moonraker: {e}")
+            return None
 
     def handle_message(self, message):
         try:
@@ -246,7 +247,15 @@ class TFTAdapter:
             return self.format_m211_response()
         elif gcode == "M115":
             return self.format_m115_response()
-        elif gcode.startswith("G28") or gcode.startswith("G90") or gcode.startswith("M82"):
+        elif gcode == "M21":
+            response = await self.websocket_handler.send_gcode_and_wait(gcode)
+            if response == "ok":
+                return "SD card ok\nok"
+            else:
+                logging.error(f"Error initializing sd card: {response}")
+        elif gcode.startswith("G28") or \
+             gcode.startswith("G90") or \
+             gcode.startswith("M82"):
             return await self.websocket_handler.send_gcode_and_wait(gcode)
         return None
 
