@@ -59,6 +59,8 @@ MOONRAKER_COMPATIBLE_GCODES = {
     "M20",
     "M21",
     "M23",
+    "M24",
+    "M27",
     "M33",
     "M82",
     "M92",
@@ -167,16 +169,24 @@ class WebSocketHandler:
                 await websocket.send(gcode_message)
 
                 # Wait for a response with matching ID
+                message = ""
                 while True:
-                    response = await websocket.recv()
-                    response_data = json.loads(response)
-                    if response_data.get("id") == message_id:
-                        return response_data.get("result", {})
+                    response = json.loads(await websocket.recv())
+                    logging.debug(f"Response: {response}")
+
+                    if response.get("method") == "notify_gcode_response":
+                        message += f"{response['params'][0]}\n"
+                    elif response.get("id") == message_id:
+                        message += f"{response.get('result')}\n"
+                        logging.debug(f"Message: {message.strip()}")
+                        return message.strip()
+
         except Exception as e:
             logging.error(f"Error sending G-code to Moonraker: {e}")
             return None
 
     def handle_message(self, message):
+        logging.debug(f"Processing WebSocket message: {message}")
         try:
             data = json.loads(message)
             if data is not None:
@@ -303,12 +313,6 @@ class TFTAdapter:
             return self.format_m115_response()
         elif gcode.startswith("M20"):
             return self.format_file_list_response()
-        elif gcode == "M21":
-            response = await self.websocket_handler.send_gcode_and_wait(gcode)
-            if response == "ok":
-                return "SD card ok\nok"
-            else:
-                logging.error(f"Error initializing sd card: {response}")
         elif gcode.startswith("M33"):
             return f"{gcode.split(' ')[1]}\nok"
         else:
