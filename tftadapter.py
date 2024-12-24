@@ -56,7 +56,9 @@ OBJECTS = {
 
 # Whitelist of Marlin-compatible G-codes
 MOONRAKER_COMPATIBLE_GCODES = {
+    "M20",
     "M21",
+    "M33",
     "M82",
     "M92",
     "M105",
@@ -104,6 +106,7 @@ class WebSocketHandler:
         self.websocket_url = websocket_url
         self.message_queue = message_queue
         self.latest_values = {}  # Start with an empty dictionary
+        self.file_list = []  # Cache of the file list
 
     async def handler(self, websocket):
         await self.subscribe_to_printer_objects(websocket)
@@ -115,6 +118,8 @@ class WebSocketHandler:
                 logging.error(f"Error in WebSocket handler: {e}")
 
     async def initialize_values(self, websocket):
+        """Initialize the latest values and file list from the printer."""
+        # Query printer objects
         query_message = json.dumps({
             "jsonrpc": "2.0",
             "method": "printer.objects.query",
@@ -132,6 +137,9 @@ class WebSocketHandler:
         self.latest_values = result.get("status")
         logging.info("Initialized latest values from printer.")
 
+        # Query file list
+        await self.query_file_list(websocket)
+
     async def subscribe_to_printer_objects(self, websocket):
         subscription_message = json.dumps({
             "jsonrpc": "2.0",
@@ -142,6 +150,15 @@ class WebSocketHandler:
         })
         await websocket.send(subscription_message)
         logging.info("Subscribed to printer object updates.")
+
+        # # Subscribe to notify_filelist_changed
+        # filelist_subscription_message = json.dumps({
+        #     "jsonrpc": "2.0",
+        #     "method": "printer.filelist.subscribe",
+        #     "params": {}
+        # })
+        # await websocket.send(filelist_subscription_message)
+        # logging.info("Subscribed to file list change notifications.")
 
     async def send_gcode_and_wait(self, gcode):
         """Send a G-code to Moonraker and wait for the response."""
@@ -175,8 +192,53 @@ class WebSocketHandler:
                     self.update_latest_values(data.get("params")[0])
                 elif data.get("method") == "notify_gcode_response":
                     self.message_queue.put(data["params"][0])
+                elif data.get("method") == "notify_filelist_changed":
+                    file_path = data["params"][0].get("item").get("path")
+                    if file_path.endswith(".gcode"):
+                        self.update_file_list(data["params"][0])
         except Exception as e:
             logging.error(f"Error processing WebSocket message: {e}")
+
+    def update_file_list(self, params):
+        item = params.get("item")
+        action = params.get("action")
+        file_path = item.get("path")
+        file_size = item.get("size", 0)
+        if action == "create_file":
+            self.file_list.insert(0, {"path": file_path, "size": file_size})
+            logging.info(f"Added new file to file_list: {file_path}")
+        elif action == "modify_file":
+            for i, file in enumerate(self.file_list):
+                if file.get("path") == file_path:
+                    self.file_list[i]["size"] = file_size
+                    logging.info(f"Updated size for {file_path}: {file_size}")
+                    break
+        elif action == "delete_file":
+            self.file_list = [file for file in self.file_list if file.get("path") != file_path]
+            logging.info(f"File {file_path} removed from file list.")
+        logging.info(f"self.file_list: {self.file_list}")
+
+    async def query_file_list(self, websocket):
+        """Query the list of files from Moonraker."""
+        try:
+            file_query_message = json.dumps({
+                "jsonrpc": "2.0",
+                "method": "server.files.list",
+                "params": {
+                    "path": ""  # Query root directory or adjust as needed
+                },
+                "id": 2
+            })
+            await websocket.send(file_query_message)
+            while True:
+                response = json.loads(await websocket.recv())
+                if response.get("id") == 2:
+                    logging.info(f"response: {response}")
+                    self.file_list = response.get("result")
+                    logging.info(f"Updated file list: {self.file_list}")
+                    break
+        except Exception as e:
+            logging.error(f"Error querying file list: {e}")
 
     def update_latest_values(self, updates):
         logging.debug(f"Update latest_values: {updates}")
@@ -247,12 +309,16 @@ class TFTAdapter:
             return self.format_m211_response()
         elif gcode == "M115":
             return self.format_m115_response()
+        elif gcode.startswith("M20"):
+            return self.format_file_list_response()
         elif gcode == "M21":
             response = await self.websocket_handler.send_gcode_and_wait(gcode)
             if response == "ok":
                 return "SD card ok\nok"
             else:
                 logging.error(f"Error initializing sd card: {response}")
+        elif gcode.startswith("M33"):
+            return f"{gcode.split(' ')[1]}\nok"
         elif gcode.startswith("G28") or \
              gcode.startswith("G90") or \
              gcode.startswith("M82"):
@@ -324,6 +390,16 @@ class TFTAdapter:
     def process_g28_command(self):
         # Simulate homing process
         return G28_RESPONSE_FORMAT
+
+    def format_file_list_response(self):
+        """Format the file list as required for M20."""
+        file_list_str = "Begin file list\n"
+        for file in self.websocket_handler.file_list:
+            filename = file.get("path")
+            size = file.get("size", 0)
+            file_list_str += f"{filename} {size}\n"
+        file_list_str += "End file list\nok"
+        return file_list_str
 
 async def main():
     parser = argparse.ArgumentParser(description="TFT Adapter for Moonraker and Artillery TFT.")
