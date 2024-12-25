@@ -5,6 +5,7 @@ import argparse
 from queue import Queue
 from websockets import connect
 import serial
+import re
 
 # Global response formats
 MACHINE_TYPE = "Artillery Genius Pro"
@@ -80,11 +81,11 @@ class SerialHandler:
         return None
 
     def write_response(self, message):
-        try:
+        # try:
             self.connection.write((message + "\n").encode("utf-8"))
             logging.info(f"Sent response back to TFT: {message}")
-        except Exception as e:
-            logging.error(f"Error sending message to TFT: {e}")
+        # except Exception as e:
+        #     logging.error(f"Error sending message to TFT: {e}")
 
 
 class WebSocketHandler:
@@ -141,6 +142,7 @@ class WebSocketHandler:
         """Send a G-code to Moonraker and wait for the response."""
         try:
             message_id = 100  # You can implement an incrementing ID for unique requests
+            logging.info(f"gcode: {gcode}")
             gcode_message = json.dumps({
                 "jsonrpc": "2.0",
                 "method": "printer.gcode.script",
@@ -273,41 +275,90 @@ class TFTAdapter:
             else:
                 await asyncio.sleep(1)
 
-    async def handle_gcode(self, gcode):
+    async def handle_gcode(self, request):
+        gcode = request.split()[0]
         if gcode == "M211":
             return f"{self.get_software_endstops()}\nok"
         elif gcode == "M115":
             return f"{self.get_firmware_info()}\nok"
-        elif gcode.startswith("M503"):
+        elif gcode == "M503":
             return f"{self.get_report_settings()}\nok"
-        elif gcode.startswith("M154"):
-            parts = gcode.split()
+        elif gcode == "M154":
+            parts = request.split()
             self.auto_report_position = int(parts[1][1:]) if len(parts) > 1 else None
-        elif gcode.startswith("M155"):
-            parts = gcode.split()
+        elif gcode == "M155":
+            parts = request.split()
             self.auto_report_temperature = int(parts[1][1:]) if len(parts) > 1 else None
         elif gcode == "M105":
             return f"{self.get_temperature()}\nok"
         elif gcode == "M114":
             return f"{self.get_position()}\nok"
-        elif gcode.startswith("M220"):
+        elif gcode == "M220":
             return f"{self.get_feed_rate(gcode)}\nok"
-        elif gcode.startswith("M221"):
+        elif gcode == "M221":
             return f"{self.get_flow_rate(gcode)}\nok"
-        elif gcode.startswith("M20"):
+        elif gcode == "M20":
             return self.get_file_list()
-        elif gcode.startswith("M33"):
-            return f"{gcode.split(' ')[1]}\nok"
-        elif gcode.startswith("M851") or \
-             gcode.startswith("M420"):
+        elif gcode == "M33":
+            return f"{request.split(' ')[1]}\nok"
+        elif gcode == "M201":
+            parts = request.split()
+            if parts[1].startswith(("X", "Y")):
+                max_acceleration = parts[1][1:]
+                return await self.websocket_handler.send_gcode_and_wait(
+                    f"SET_VELOCITY_LIMIT "
+                    f"ACCEL={max_acceleration} "
+                    f"ACCEL_TO_DECEL={int(max_acceleration) / 2}"
+                )
+            elif parts[1].startswith(("Z", "E")):
+                pass # Can't be configured dynamically
+        elif gcode == "M203":
+            parts = request.split()
+            if parts[1].startswith(("X", "Y")):
+                max_velocity = parts[1][1:]
+                return await self.websocket_handler.send_gcode_and_wait(
+                    f"SET_VELOCITY_LIMIT VELOCITY={max_velocity}"
+                )
+            elif parts[1].startswith(("Z", "E")):
+                pass # Can't be configured dynamically
+        elif gcode == "M206":
+            parts = request.split()
+            if parts[1].startswith(("X", "Y", "Z", "E")):
+                return await self.websocket_handler.send_gcode_and_wait(
+                    f"SET_GCODE_OFFSET {parts[1][:1]}={parts[1][1:]}"
+                )
+        elif gcode == "M150":
+            return await self.set_led_color(request)
+        elif gcode in ("M851", "M420", "M22"):
             # Unknown commands
             return "ok"
-        elif gcode.startswith("M92") or \
-             gcode.startswith("T0"):
+        elif gcode in ("M92", "T0"):
             return "ok"
         else:
-            return await self.websocket_handler.send_gcode_and_wait(gcode)
+            return await self.websocket_handler.send_gcode_and_wait(request)
         return None
+
+    async def set_led_color(self, request):
+        # Use regex to extract key-value pairs like 'R255', 'U0', etc.
+        pattern = re.compile(r'([A-Za-z])(\d+)')
+        params = {match[0]: int(match[1]) for match in pattern.findall(request)}
+        print(params)
+
+        # Get the RGB, White, Brightness, and Intensity values, defaulting to 0 if not provided
+        red = params.get("R", 0) / 255.0
+        green = params.get("U", 0) / 255.0
+        blue = params.get("B", 0) / 255.0
+        white = params.get("W", 0) / 255.0
+        brightness = params.get("P", 0) / 255.0
+        intensity = params.get("I", 0) / 255.0  # Optional if needed
+
+        # Construct the Moonraker SET_LED command
+        moonraker_command = (
+            f"SET_LED LED=statusled RED={red:.3f} GREEN={green:.3f} "
+            f"BLUE={blue:.3f} WHITE={white:.3f} BRIGHTNESS={brightness:.3f}"
+        )
+
+        return await self.websocket_handler.send_gcode_and_wait(moonraker_command)
 
     def get_temperature(self):
         extruder = self.websocket_handler.latest_values["extruder"]
