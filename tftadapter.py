@@ -7,20 +7,25 @@ from websockets import connect
 import serial
 
 # Global response formats
-TEMPERATURE_RESPONSE_FORMAT = "ok T:{extruder_temperature:.2f} /{extruder_target:.2f} B:{bed_temperature:.2f} /{bed_target:.2f} @:0 B@:0"
-POSITION_RESPONSE_FORMAT = "X:{x:.2f} Y:{y:.2f} Z:{z:.2f} E:{e:.2f} \nok"
-FEED_RATE_RESPONSE_FORMAT = "FR:{fr:.2f}%\nok"
-FLOW_RATE_RESPONSE_FORMAT = "E0 Flow: {er:.2f}%\nok"
-REPORT_SETTINGS_RESPONSE_FORMAT = (
+TEMPERATURE_FORMAT = (
+    "ok "
+    "T:{extruder_temperature:.2f} /{extruder_target:.2f} "
+    "B:{bed_temperature:.2f} /{bed_target:.2f} "
+    "@:0 B@:0"
+)
+POSITION_FORMAT = "X:{x:.2f} Y:{y:.2f} Z:{z:.2f} E:{e:.2f} \nok"
+FEED_RATE_FORMAT = "FR:{fr:.2f}%\nok"
+FLOW_RATE_FORMAT = "E0 Flow: {er:.2f}%\nok"
+REPORT_SETTINGS_FORMAT = (
     "M203 X{toolhead_max_velocity} Y{toolhead_max_velocity} Z{max_z_velocity} E{max_extrude_only_velocity}\n"
     "M201 X{toolhead_max_accel} Y{toolhead_max_accel} Z{max_z_accel} E{max_extrude_only_accel}\n"
     "M206 X{homing_origin_x} Y{homing_origin_y} Z{homing_origin_z}\n"
     "M851 X{x_offset} Y{y_offset} Z{z_offset}\n"
     "M420 S1 Z{bed_mesh_fade_end}\n"
-    "M106 S{fan_speed}"
+    "M106 S{fan_speed}\nok"
 )
-SOFTWARE_ENDSTOPS_RESPONSE_FORMAT = "Soft endstops: {state}\nok"
-FIRMWARE_INFO_RESPONSE_FORMAT = (
+SOFTWARE_ENDSTOPS_FORMAT = "Soft endstops: {state}\nok"
+FIRMWARE_INFO_FORMAT = (
     "FIRMWARE_NAME:Klipper {mcu_version} "
     "SOURCE_CODE_URL:https://github.com/Klipper3d/klipper "
     "PROTOCOL_VERSION:1.0 "
@@ -279,21 +284,21 @@ class TFTAdapter:
 
     async def periodic_position_update(self):
         while True:
-            response = self.format_position_response()
+            response = self.get_position()
             if response:
                 self.serial_handler.write_response(response)
             await asyncio.sleep(3)
 
     async def periodic_temperature_update(self):
         while True:
-            response = self.format_temperature_response()
+            response = self.get_temperature()
             if response:
                 self.serial_handler.write_response(response)
             await asyncio.sleep(3)
 
     async def handle_gcode(self, gcode):
         if gcode == "M105":
-            return self.format_temperature_response()
+            return self.get_temperature()
         elif gcode.startswith("M154"):
             return "ok"
         elif gcode.startswith("M155"):
@@ -301,51 +306,53 @@ class TFTAdapter:
         elif gcode.startswith("M92"):
             return "ok"
         elif gcode == "M114":
-            return self.format_position_response()
+            return self.get_position()
         elif gcode.startswith("M220"):
-            return self.process_feed_rate_command(gcode)
+            return self.get_feed_rate(gcode)
         elif gcode.startswith("M221"):
-            return self.process_flow_rate_command(gcode)
+            return self.get_flow_rate(gcode)
         elif gcode == "M503":
-            return self.format_report_settings_response()
+            return self.get_report_settings()
         elif gcode == "M211":
-            return self.format_software_endstops_response()
+            return self.get_software_endstops()
         elif gcode == "M115":
-            return self.format_firmware_info_response()
+            return self.get_firmware_info()
         elif gcode.startswith("M20"):
-            return self.format_file_list_response()
+            return self.get_file_list()
         elif gcode.startswith("M33"):
             return f"{gcode.split(' ')[1]}\nok"
         else:
             return await self.websocket_handler.send_gcode_and_wait(gcode)
         return None
 
-    def format_temperature_response(self):
+    def get_temperature(self):
         extruder = self.websocket_handler.latest_values["extruder"]
         heater_bed = self.websocket_handler.latest_values["heater_bed"]
-        return TEMPERATURE_RESPONSE_FORMAT.format(
+        return TEMPERATURE_FORMAT.format(
             extruder_temperature=extruder['temperature'],
             extruder_target=extruder['target'],
             bed_temperature=heater_bed['temperature'],
             bed_target=heater_bed['target']
         )
 
-    def format_position_response(self):
+    def get_position(self):
         position = self.websocket_handler.latest_values["gcode_move"]["position"]
-        return POSITION_RESPONSE_FORMAT.format(
+        return POSITION_FORMAT.format(
             x=position[0],
             y=position[1],
             z=position[2],
             e=position[3]
         )
 
-    def process_feed_rate_command(self, gcode):
-        return FEED_RATE_RESPONSE_FORMAT.format(fr=self.websocket_handler.latest_values["gcode_move"]["speed_factor"] * 100)
+    def get_feed_rate(self, gcode):
+        flow_rate = self.websocket_handler.latest_values["gcode_move"]["speed_factor"] * 100
+        return FEED_RATE_FORMAT.format(fr=flow_rate)
 
-    def process_flow_rate_command(self, gcode):
-        return FLOW_RATE_RESPONSE_FORMAT.format(er=self.websocket_handler.latest_values["gcode_move"]["extrude_factor"] * 100)
+    def get_flow_rate(self, gcode):
+        extrude_rate = self.websocket_handler.latest_values["gcode_move"]["extrude_factor"] * 100
+        return FLOW_RATE_FORMAT.format(er=extrude_rate)
 
-    def format_report_settings_response(self):
+    def get_report_settings(self):
         # Access the latest values from the WebSocket
         toolhead = self.websocket_handler.latest_values["toolhead"]
         config = self.websocket_handler.latest_values["configfile"]["settings"]
@@ -353,7 +360,7 @@ class TFTAdapter:
         fan = self.websocket_handler.latest_values["fan"]
 
         # Format the M503 response using the global variables
-        return REPORT_SETTINGS_RESPONSE_FORMAT.format(
+        return REPORT_SETTINGS_FORMAT.format(
             toolhead_max_velocity=toolhead["max_velocity"],
             max_z_velocity=config["printer"]["max_z_velocity"],
             max_extrude_only_velocity=config["extruder"]["max_extrude_only_velocity"],
@@ -368,17 +375,17 @@ class TFTAdapter:
             z_offset=config.get('bltouch', config.get('probe'))["z_offset"],
             bed_mesh_fade_end=config["bed_mesh"]["fade_end"],
             fan_speed=fan["speed"] * 255.0  # Convert fan speed to PWM value
-        ) + "\nok"
+        )
 
-    def format_firmware_info_response(self):
+    def get_firmware_info(self):
         mcu_version = self.websocket_handler.latest_values["mcu"]["mcu_version"]
-        return FIRMWARE_INFO_RESPONSE_FORMAT.format(mcu_version=mcu_version)
+        return FIRMWARE_INFO_FORMAT.format(mcu_version=mcu_version)
 
-    def format_software_endstops_response(self):
+    def get_software_endstops(self):
         state = "On"  # Replace with actual logic to determine soft endstops state
-        return SOFTWARE_ENDSTOPS_RESPONSE_FORMAT.format(state=state)
+        return SOFTWARE_ENDSTOPS_FORMAT.format(state=state)
 
-    def format_file_list_response(self):
+    def get_file_list(self):
         """Format the file list as required for M20."""
         file_list_str = "Begin file list\n"
         for file in self.websocket_handler.file_list:
