@@ -7,6 +7,7 @@ from websockets import connect
 import serial
 
 # Global response formats
+MACHINE_TYPE = "Artillery Genius Pro"
 TEMPERATURE_FORMAT = (
     "ok "
     "T:{extruder_temperature:.2f} /{extruder_target:.2f} "
@@ -29,7 +30,7 @@ FIRMWARE_INFO_FORMAT = (
     "FIRMWARE_NAME:Klipper {mcu_version} "
     "SOURCE_CODE_URL:https://github.com/Klipper3d/klipper "
     "PROTOCOL_VERSION:1.0 "
-    "MACHINE_TYPE:Sidewinder X2\n"
+    "MACHINE_TYPE: {MACHINE_TYPE}\n"
     "Cap:EEPROM:1\n"
     "Cap:AUTOREPORT_TEMP:1\n"
     "Cap:AUTOREPORT_POS:1\n"
