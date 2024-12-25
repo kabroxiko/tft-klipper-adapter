@@ -7,16 +7,18 @@ from websockets import connect
 import serial
 
 # Global response formats
-TEMPERATURE_RESPONSE_FORMAT = "ok T:{ETemp:.2f} /{ETarget:.2f} B:{BTemp:.2f} /{BTarget:.2f} @:0 B@:0"
+TEMPERATURE_RESPONSE_FORMAT = "ok T:{extruder_temperature:.2f} /{extruder_target:.2f} B:{bed_temperature:.2f} /{bed_target:.2f} @:0 B@:0"
 POSITION_RESPONSE_FORMAT = "X:{x:.2f} Y:{y:.2f} Z:{z:.2f} E:{e:.2f} \nok"
 FEED_RATE_RESPONSE_FORMAT = "FR:{fr:.2f}%\nok"
 FLOW_RATE_RESPONSE_FORMAT = "E0 Flow: {er:.2f}%\nok"
-REPORT_SETTINGS_M203_RESPONSE_FORMAT = "M203 X{toolhead_max_velocity} Y{toolhead_max_velocity} Z{max_z_velocity} E{max_extrude_only_velocity}"
-REPORT_SETTINGS_M201_RESPONSE_FORMAT = "M201 X{toolhead_max_accel} Y{toolhead_max_accel} Z{max_z_accel} E{max_extrude_only_accel}"
-REPORT_SETTINGS_M206_RESPONSE_FORMAT = "M206 X{homing_origin_x} Y{homing_origin_y} Z{homing_origin_z}"
-REPORT_SETTINGS_M851_RESPONSE_FORMAT = "M851 X{bltouch_x_offset} Y{bltouch_y_offset} Z{bltouch_x_offset}"
-REPORT_SETTINGS_M420_RESPONSE_FORMAT = "M420 S1 Z{bed_mesh_fade_end}"
-REPORT_SETTINGS_M106_RESPONSE_FORMAT = "M106 S{fan_speed}"
+REPORT_SETTINGS_RESPONSE_FORMAT = (
+    "M203 X{toolhead_max_velocity} Y{toolhead_max_velocity} Z{max_z_velocity} E{max_extrude_only_velocity}\n"
+    "M201 X{toolhead_max_accel} Y{toolhead_max_accel} Z{max_z_accel} E{max_extrude_only_accel}\n"
+    "M206 X{homing_origin_x} Y{homing_origin_y} Z{homing_origin_z}\n"
+    "M851 X{x_offset} Y{y_offset} Z{z_offset}\n"
+    "M420 S1 Z{bed_mesh_fade_end}\n"
+    "M106 S{fan_speed}"
+)
 SOFTWARE_ENDSTOPS_RESPONSE_FORMAT = "Soft endstops: {state}\nok"
 FIRMWARE_INFO_RESPONSE_FORMAT = (
     "FIRMWARE_NAME:Klipper {mcu_version} "
@@ -322,10 +324,10 @@ class TFTAdapter:
         extruder = self.websocket_handler.latest_values["extruder"]
         heater_bed = self.websocket_handler.latest_values["heater_bed"]
         return TEMPERATURE_RESPONSE_FORMAT.format(
-            ETemp=extruder['temperature'],
-            ETarget=extruder['target'],
-            BTemp=heater_bed['temperature'],
-            BTarget=heater_bed['target']
+            extruder_temperature=extruder['temperature'],
+            extruder_target=extruder['target'],
+            bed_temperature=heater_bed['temperature'],
+            bed_target=heater_bed['target']
         )
 
     def format_position_response(self):
@@ -351,24 +353,20 @@ class TFTAdapter:
         fan = self.websocket_handler.latest_values["fan"]
 
         # Format the M503 response using the global variables
-        return REPORT_SETTINGS_M203_RESPONSE_FORMAT.format(
+        return REPORT_SETTINGS_RESPONSE_FORMAT.format(
             toolhead_max_velocity=toolhead["max_velocity"],
             max_z_velocity=config["printer"]["max_z_velocity"],
-            max_extrude_only_velocity=config["extruder"]["max_extrude_only_velocity"]
-        ) + "\n" + REPORT_SETTINGS_M201_RESPONSE_FORMAT.format(
+            max_extrude_only_velocity=config["extruder"]["max_extrude_only_velocity"],
             toolhead_max_accel=toolhead["max_accel"],
             max_z_accel=config["printer"]["max_z_accel"],
-            max_extrude_only_accel=config["extruder"]["max_extrude_only_accel"]
-        ) + "\n" + REPORT_SETTINGS_M206_RESPONSE_FORMAT.format(
+            max_extrude_only_accel=config["extruder"]["max_extrude_only_accel"],
             homing_origin_x=gcode_move["homing_origin"][0],
             homing_origin_y=gcode_move["homing_origin"][1],
-            homing_origin_z=gcode_move["homing_origin"][2]
-        ) + "\n" + REPORT_SETTINGS_M851_RESPONSE_FORMAT.format(
-            bltouch_x_offset=config["bltouch"]["x_offset"],
-            bltouch_y_offset=config["bltouch"]["y_offset"]
-        ) + "\n" + REPORT_SETTINGS_M420_RESPONSE_FORMAT.format(
-            bed_mesh_fade_end=config["bed_mesh"]["fade_end"]
-        ) + "\n" + REPORT_SETTINGS_M106_RESPONSE_FORMAT.format(
+            homing_origin_z=gcode_move["homing_origin"][2],
+            x_offset=config.get('bltouch', config.get('probe'))["x_offset"],
+            y_offset=config.get('bltouch', config.get('probe'))["y_offset"],
+            z_offset=config.get('bltouch', config.get('probe'))["z_offset"],
+            bed_mesh_fade_end=config["bed_mesh"]["fade_end"],
             fan_speed=fan["speed"] * 255.0  # Convert fan speed to PWM value
         ) + "\nok"
 
