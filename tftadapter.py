@@ -9,28 +9,27 @@ import serial
 # Global response formats
 MACHINE_TYPE = "Artillery Genius Pro"
 TEMPERATURE_FORMAT = (
-    "ok "
     "T:{extruder_temperature:.2f} /{extruder_target:.2f} "
     "B:{bed_temperature:.2f} /{bed_target:.2f} "
     "@:0 B@:0"
 )
-POSITION_FORMAT = "X:{x:.2f} Y:{y:.2f} Z:{z:.2f} E:{e:.2f} \nok"
-FEED_RATE_FORMAT = "FR:{fr:.2f}%\nok"
-FLOW_RATE_FORMAT = "E0 Flow: {er:.2f}%\nok"
+POSITION_FORMAT = "X:{x:.2f} Y:{y:.2f} Z:{z:.2f} E:{e:.2f}"
+FEED_RATE_FORMAT = "FR:{fr:.2f}%"
+FLOW_RATE_FORMAT = "E0 Flow: {er:.2f}%"
 REPORT_SETTINGS_FORMAT = (
     "M203 X{toolhead_max_velocity} Y{toolhead_max_velocity} Z{max_z_velocity} E{max_extrude_only_velocity}\n"
     "M201 X{toolhead_max_accel} Y{toolhead_max_accel} Z{max_z_accel} E{max_extrude_only_accel}\n"
     "M206 X{homing_origin_x} Y{homing_origin_y} Z{homing_origin_z}\n"
     "M851 X{x_offset} Y{y_offset} Z{z_offset}\n"
     "M420 S1 Z{bed_mesh_fade_end}\n"
-    "M106 S{fan_speed}\nok"
+    "M106 S{fan_speed}"
 )
-SOFTWARE_ENDSTOPS_FORMAT = "Soft endstops: {state}\nok"
+SOFTWARE_ENDSTOPS_FORMAT = "Soft endstops: {state}"
 FIRMWARE_INFO_FORMAT = (
     "FIRMWARE_NAME:Klipper {mcu_version} "
     "SOURCE_CODE_URL:https://github.com/Klipper3d/klipper "
     "PROTOCOL_VERSION:1.0 "
-    "MACHINE_TYPE: {MACHINE_TYPE}\n"
+    "MACHINE_TYPE: {machine_type}\n"
     "Cap:EEPROM:1\n"
     "Cap:AUTOREPORT_TEMP:1\n"
     "Cap:AUTOREPORT_POS:1\n"
@@ -261,6 +260,8 @@ class TFTAdapter:
         self.serial_handler = serial_handler
         self.websocket_handler = websocket_handler
         self.gcode_queue = Queue()
+        self.auto_report_temperature = None
+        self.auto_report_position = None
 
     async def serial_reader(self):
         while True:
@@ -277,47 +278,48 @@ class TFTAdapter:
                 logging.info(f"Processing G-code: {gcode}")
                 if gcode.split()[0] in MOONRAKER_COMPATIBLE_GCODES:
                     response = await self.handle_gcode(gcode)
-                    if response:
-                        self.serial_handler.write_response(response)
-                else:
-                    logging.warning(f"G-code {gcode} is not in the whitelist and will not be processed.")
+                    self.serial_handler.write_response("ok" if f"{response}" == "None" else response)
             await asyncio.sleep(0.1)
 
     async def periodic_position_update(self):
         while True:
-            response = self.get_position()
-            if response:
-                self.serial_handler.write_response(response)
-            await asyncio.sleep(3)
+            if self.auto_report_position and self.auto_report_position > 0:
+                self.serial_handler.write_response(f"{self.get_position()}")
+                await asyncio.sleep(self.auto_report_position)
+            else:
+                await asyncio.sleep(1)
 
     async def periodic_temperature_update(self):
         while True:
-            response = self.get_temperature()
-            if response:
-                self.serial_handler.write_response(response)
-            await asyncio.sleep(3)
+            if self.auto_report_temperature and self.auto_report_temperature > 0:
+                self.serial_handler.write_response(f"ok {self.get_temperature()}")
+                await asyncio.sleep(self.auto_report_temperature)
+            else:
+                await asyncio.sleep(1)
 
     async def handle_gcode(self, gcode):
-        if gcode == "M105":
-            return self.get_temperature()
+        if gcode == "M211":
+            return f"{self.get_software_endstops()}\nok"
+        elif gcode == "M115":
+            return f"{self.get_firmware_info()}\nok"
+        elif gcode.startswith("M503"):
+            return f"{self.get_report_settings()}\nok"
         elif gcode.startswith("M154"):
-            return "ok"
+            parts = gcode.split()
+            self.auto_report_position = int(parts[1][1:]) if len(parts) > 1 else None
         elif gcode.startswith("M155"):
-            return "ok"
+            parts = gcode.split()
+            self.auto_report_temperature = int(parts[1][1:]) if len(parts) > 1 else None
+        elif gcode == "M105":
+            return f"{self.get_temperature()}\nok"
+        elif gcode == "M114":
+            return f"{self.get_position()}\nok"
+        elif gcode.startswith("M220"):
+            return f"{self.get_feed_rate(gcode)}\nok"
+        elif gcode.startswith("M221"):
+            return f"{self.get_flow_rate(gcode)}\nok"
         elif gcode.startswith("M92"):
             return "ok"
-        elif gcode == "M114":
-            return self.get_position()
-        elif gcode.startswith("M220"):
-            return self.get_feed_rate(gcode)
-        elif gcode.startswith("M221"):
-            return self.get_flow_rate(gcode)
-        elif gcode == "M503":
-            return self.get_report_settings()
-        elif gcode == "M211":
-            return self.get_software_endstops()
-        elif gcode == "M115":
-            return self.get_firmware_info()
         elif gcode.startswith("M20"):
             return self.get_file_list()
         elif gcode.startswith("M33"):
@@ -380,7 +382,10 @@ class TFTAdapter:
 
     def get_firmware_info(self):
         mcu_version = self.websocket_handler.latest_values["mcu"]["mcu_version"]
-        return FIRMWARE_INFO_FORMAT.format(mcu_version=mcu_version)
+        return FIRMWARE_INFO_FORMAT.format(
+            mcu_version=mcu_version,
+            machine_type=MACHINE_TYPE
+        )
 
     def get_software_endstops(self):
         state = "On"  # Replace with actual logic to determine soft endstops state
