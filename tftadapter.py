@@ -60,29 +60,6 @@ OBJECTS = {
     "fan": ["speed"]
 }
 
-# Whitelist of Marlin-compatible G-codes
-MOONRAKER_COMPATIBLE_GCODES = {
-    "M20",
-    "M21",
-    "M23",
-    "M24",
-    "M27",
-    "M33",
-    "M82",
-    "M92",
-    "M105",
-    "M114",
-    "M115",
-    "M154",
-    "M155",
-    "M211",
-    "M220",
-    "M221",
-    "M503",
-    "G28",
-    "G90"
-}
-
 class SerialHandler:
     def __init__(self, serial_port, baud_rate):
         self.serial_port = serial_port
@@ -276,9 +253,8 @@ class TFTAdapter:
             if not self.gcode_queue.empty():
                 gcode = self.gcode_queue.get()
                 logging.info(f"Processing G-code: {gcode}")
-                if gcode.split()[0] in MOONRAKER_COMPATIBLE_GCODES:
-                    response = await self.handle_gcode(gcode)
-                    self.serial_handler.write_response("ok" if f"{response}" == "None" else response)
+                response = await self.handle_gcode(gcode)
+                self.serial_handler.write_response("ok" if f"{response}" == "None" else response)
             await asyncio.sleep(0.1)
 
     async def periodic_position_update(self):
@@ -318,12 +294,17 @@ class TFTAdapter:
             return f"{self.get_feed_rate(gcode)}\nok"
         elif gcode.startswith("M221"):
             return f"{self.get_flow_rate(gcode)}\nok"
-        elif gcode.startswith("M92"):
-            return "ok"
         elif gcode.startswith("M20"):
             return self.get_file_list()
         elif gcode.startswith("M33"):
             return f"{gcode.split(' ')[1]}\nok"
+        elif gcode.startswith("M851") or \
+             gcode.startswith("M420"):
+            # Unknown commands
+            return "ok"
+        elif gcode.startswith("M92") or \
+             gcode.startswith("T0"):
+            return "ok"
         else:
             return await self.websocket_handler.send_gcode_and_wait(gcode)
         return None
