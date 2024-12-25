@@ -11,15 +11,14 @@ TEMPERATURE_RESPONSE_FORMAT = "ok T:{ETemp:.2f} /{ETarget:.2f} B:{BTemp:.2f} /{B
 POSITION_RESPONSE_FORMAT = "X:{x:.2f} Y:{y:.2f} Z:{z:.2f} E:{e:.2f} \nok"
 FEED_RATE_RESPONSE_FORMAT = "FR:{fr:.2f}%\nok"
 FLOW_RATE_RESPONSE_FORMAT = "E0 Flow: {er:.2f}%\nok"
-M503_M203_FORMAT = "M203 X{toolhead_max_velocity} Y{toolhead_max_velocity} Z{max_z_velocity} E{max_extrude_only_velocity}"
-M503_M201_FORMAT = "M201 X{toolhead_max_accel} Y{toolhead_max_accel} Z{max_z_accel} E{max_extrude_only_accel}"
-M503_M206_FORMAT = "M206 X{homing_origin_x} Y{homing_origin_y} Z{homing_origin_z}"
-M503_M851_FORMAT = "M851 X{bltouch_x_offset} Y{bltouch_y_offset} Z{bltouch_x_offset}"
-M503_M420_FORMAT = "M420 S1 Z{bed_mesh_fade_end}"
-M503_M106_FORMAT = "M106 S{fan_speed}"
-M211_RESPONSE_FORMAT = "Soft endstops: {state}\nok"
-G28_RESPONSE_FORMAT = "ok Homing done\n"
-M115_RESPONSE_FORMAT = (
+REPORT_SETTINGS_M203_RESPONSE_FORMAT = "M203 X{toolhead_max_velocity} Y{toolhead_max_velocity} Z{max_z_velocity} E{max_extrude_only_velocity}"
+REPORT_SETTINGS_M201_RESPONSE_FORMAT = "M201 X{toolhead_max_accel} Y{toolhead_max_accel} Z{max_z_accel} E{max_extrude_only_accel}"
+REPORT_SETTINGS_M206_RESPONSE_FORMAT = "M206 X{homing_origin_x} Y{homing_origin_y} Z{homing_origin_z}"
+REPORT_SETTINGS_M851_RESPONSE_FORMAT = "M851 X{bltouch_x_offset} Y{bltouch_y_offset} Z{bltouch_x_offset}"
+REPORT_SETTINGS_M420_RESPONSE_FORMAT = "M420 S1 Z{bed_mesh_fade_end}"
+REPORT_SETTINGS_M106_RESPONSE_FORMAT = "M106 S{fan_speed}"
+SOFTWARE_ENDSTOPS_RESPONSE_FORMAT = "Soft endstops: {state}\nok"
+FIRMWARE_INFO_RESPONSE_FORMAT = (
     "FIRMWARE_NAME:Klipper {mcu_version} "
     "SOURCE_CODE_URL:https://github.com/Klipper3d/klipper "
     "PROTOCOL_VERSION:1.0 "
@@ -297,6 +296,8 @@ class TFTAdapter:
             return "ok"
         elif gcode.startswith("M155"):
             return "ok"
+        elif gcode.startswith("M92"):
+            return "ok"
         elif gcode == "M114":
             return self.format_position_response()
         elif gcode.startswith("M220"):
@@ -304,13 +305,11 @@ class TFTAdapter:
         elif gcode.startswith("M221"):
             return self.process_flow_rate_command(gcode)
         elif gcode == "M503":
-            return self.format_m503_response()
-        elif gcode.startswith("M92"):
-            return "ok"
+            return self.format_report_settings_response()
         elif gcode == "M211":
-            return self.format_m211_response()
+            return self.format_software_endstops_response()
         elif gcode == "M115":
-            return self.format_m115_response()
+            return self.format_firmware_info_response()
         elif gcode.startswith("M20"):
             return self.format_file_list_response()
         elif gcode.startswith("M33"):
@@ -344,7 +343,7 @@ class TFTAdapter:
     def process_flow_rate_command(self, gcode):
         return FLOW_RATE_RESPONSE_FORMAT.format(er=self.websocket_handler.latest_values["gcode_move"]["extrude_factor"] * 100)
 
-    def format_m503_response(self):
+    def format_report_settings_response(self):
         # Access the latest values from the WebSocket
         toolhead = self.websocket_handler.latest_values["toolhead"]
         config = self.websocket_handler.latest_values["configfile"]["settings"]
@@ -352,38 +351,34 @@ class TFTAdapter:
         fan = self.websocket_handler.latest_values["fan"]
 
         # Format the M503 response using the global variables
-        return M503_M203_FORMAT.format(
+        return REPORT_SETTINGS_M203_RESPONSE_FORMAT.format(
             toolhead_max_velocity=toolhead["max_velocity"],
             max_z_velocity=config["printer"]["max_z_velocity"],
             max_extrude_only_velocity=config["extruder"]["max_extrude_only_velocity"]
-        ) + "\n" + M503_M201_FORMAT.format(
+        ) + "\n" + REPORT_SETTINGS_M201_RESPONSE_FORMAT.format(
             toolhead_max_accel=toolhead["max_accel"],
             max_z_accel=config["printer"]["max_z_accel"],
             max_extrude_only_accel=config["extruder"]["max_extrude_only_accel"]
-        ) + "\n" + M503_M206_FORMAT.format(
+        ) + "\n" + REPORT_SETTINGS_M206_RESPONSE_FORMAT.format(
             homing_origin_x=gcode_move["homing_origin"][0],
             homing_origin_y=gcode_move["homing_origin"][1],
             homing_origin_z=gcode_move["homing_origin"][2]
-        ) + "\n" + M503_M851_FORMAT.format(
+        ) + "\n" + REPORT_SETTINGS_M851_RESPONSE_FORMAT.format(
             bltouch_x_offset=config["bltouch"]["x_offset"],
             bltouch_y_offset=config["bltouch"]["y_offset"]
-        ) + "\n" + M503_M420_FORMAT.format(
+        ) + "\n" + REPORT_SETTINGS_M420_RESPONSE_FORMAT.format(
             bed_mesh_fade_end=config["bed_mesh"]["fade_end"]
-        ) + "\n" + M503_M106_FORMAT.format(
+        ) + "\n" + REPORT_SETTINGS_M106_RESPONSE_FORMAT.format(
             fan_speed=fan["speed"] * 255.0  # Convert fan speed to PWM value
         ) + "\nok"
 
-    def format_m115_response(self):
+    def format_firmware_info_response(self):
         mcu_version = self.websocket_handler.latest_values["mcu"]["mcu_version"]
-        return M115_RESPONSE_FORMAT.format(mcu_version=mcu_version)
+        return FIRMWARE_INFO_RESPONSE_FORMAT.format(mcu_version=mcu_version)
 
-    def format_m211_response(self):
+    def format_software_endstops_response(self):
         state = "On"  # Replace with actual logic to determine soft endstops state
-        return M211_RESPONSE_FORMAT.format(state=state)
-
-    def process_g28_command(self):
-        # Simulate homing process
-        return G28_RESPONSE_FORMAT
+        return SOFTWARE_ENDSTOPS_RESPONSE_FORMAT.format(state=state)
 
     def format_file_list_response(self):
         """Format the file list as required for M20."""
