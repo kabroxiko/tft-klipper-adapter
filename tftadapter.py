@@ -276,7 +276,10 @@ class TFTAdapter:
                 await asyncio.sleep(1)
 
     async def handle_gcode(self, request):
-        gcode = request.split()[0]
+        parts = request.split()
+        gcode = parts[0]
+        parameters = " ".join(request.split()[1:]) if len(parts) > 1 else None
+
         if gcode == "M211":
             return f"{self.get_software_endstops()}\nok"
         elif gcode == "M115":
@@ -285,50 +288,47 @@ class TFTAdapter:
             return f"{self.get_report_settings()}\nok"
         elif gcode == "M154":
             parts = request.split()
-            self.auto_report_position = int(parts[1][1:]) if len(parts) > 1 else None
+            self.auto_report_position = int(parameters[1:]) if len(parts) > 1 else None
         elif gcode == "M155":
             parts = request.split()
-            self.auto_report_temperature = int(parts[1][1:]) if len(parts) > 1 else None
+            self.auto_report_temperature = int(parameters[1:]) if len(parts) > 1 else None
         elif gcode == "M105":
             return f"{self.get_temperature()}\nok"
         elif gcode == "M114":
             return f"{self.get_position()}\nok"
-        elif gcode == "M220":
+        elif request == "M220":
             return f"{self.get_feed_rate(gcode)}\nok"
-        elif gcode == "M221":
+        elif request == "M221":
             return f"{self.get_flow_rate(gcode)}\nok"
         elif gcode == "M20":
             return self.get_file_list()
         elif gcode == "M33":
             return f"{request.split(' ')[1]}\nok"
         elif gcode == "M201":
-            parts = request.split()
-            if parts[1].startswith(("X", "Y")):
-                max_acceleration = parts[1][1:]
+            if parameters.startswith(("X", "Y")):
+                max_acceleration = parameters[1:]
                 return await self.websocket_handler.send_gcode_and_wait(
                     f"SET_VELOCITY_LIMIT "
                     f"ACCEL={max_acceleration} "
                     f"ACCEL_TO_DECEL={int(max_acceleration) / 2}"
                 )
-            elif parts[1].startswith(("Z", "E")):
+            elif parameters.startswith(("Z", "E")):
                 pass # Can't be configured dynamically
         elif gcode == "M203":
-            parts = request.split()
-            if parts[1].startswith(("X", "Y")):
-                max_velocity = parts[1][1:]
+            if parameters.startswith(("X", "Y")):
+                max_velocity = parameters[1:]
                 return await self.websocket_handler.send_gcode_and_wait(
                     f"SET_VELOCITY_LIMIT VELOCITY={max_velocity}"
                 )
-            elif parts[1].startswith(("Z", "E")):
+            elif parameters.startswith(("Z", "E")):
                 pass # Can't be configured dynamically
         elif gcode == "M206":
-            parts = request.split()
-            if parts[1].startswith(("X", "Y", "Z", "E")):
+            if parameters.startswith(("X", "Y", "Z", "E")):
                 return await self.websocket_handler.send_gcode_and_wait(
-                    f"SET_GCODE_OFFSET {parts[1][:1]}={parts[1][1:]}"
+                    f"SET_GCODE_OFFSET {parameters[:1]}={parameters[1:]}"
                 )
         elif gcode == "M150":
-            return await self.set_led_color(request)
+            return await self.set_led_color(parameters)
         elif gcode in ("M851", "M420", "M22"):
             # Unknown commands
             return "ok"
@@ -338,11 +338,10 @@ class TFTAdapter:
             return await self.websocket_handler.send_gcode_and_wait(request)
         return None
 
-    async def set_led_color(self, request):
+    async def set_led_color(self, parameters):
         # Use regex to extract key-value pairs like 'R255', 'U0', etc.
-        pattern = re.compile(r'([A-Za-z])(\d+)')
-        params = {match[0]: int(match[1]) for match in pattern.findall(request)}
-        print(params)
+        pattern = re.compile(r'([RUBWPI])(\d+)')
+        params = {match[0]: int(match[1]) for match in pattern.findall(parameters)}
 
         # Get the RGB, White, Brightness, and Intensity values, defaulting to 0 if not provided
         red = params.get("R", 0) / 255.0
