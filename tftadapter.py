@@ -81,11 +81,11 @@ class SerialHandler:
         return None
 
     def write_response(self, message):
-        # try:
+        try:
             self.connection.write((message + "\n").encode("utf-8"))
-            logging.info(f"Sent response back to TFT: {message}")
-        # except Exception as e:
-        #     logging.error(f"Error sending message to TFT: {e}")
+            logging.info(f"Sent to TFT: {message}")
+        except Exception as e:
+            logging.error(f"Error sending message to TFT: {e}")
 
 
 class WebSocketHandler:
@@ -142,7 +142,6 @@ class WebSocketHandler:
         """Send a G-code to Moonraker and wait for the response."""
         try:
             message_id = 100  # You can implement an incrementing ID for unique requests
-            logging.info(f"gcode: {gcode}")
             gcode_message = json.dumps({
                 "jsonrpc": "2.0",
                 "method": "printer.gcode.script",
@@ -329,7 +328,19 @@ class TFTAdapter:
                 )
         elif gcode == "M150":
             return await self.set_led_color(parameters)
-        elif gcode in ("M851", "M420", "M22"):
+        elif gcode == "M524":
+            return await self.websocket_handler.send_gcode_and_wait("CANCEL_PRINT")
+        elif gcode == "M701":
+            return await self.load(parameters)
+        elif gcode == "M702":
+            return await self.websocket_handler.send_gcode_and_wait("CANCEL_PRINT")
+        elif gcode == "M118":
+            # TODO
+            parts = parameters.split()
+
+            return await self.websocket_handler.send_gcode_and_wait("CANCEL_PRINT")
+            return await self.websocket_handler.send_gcode_and_wait(request)
+        elif gcode in ("M851", "M420", "M22", "M108"):
             # Unknown commands
             return "ok"
         elif gcode in ("M92", "T0"):
@@ -337,6 +348,24 @@ class TFTAdapter:
         else:
             return await self.websocket_handler.send_gcode_and_wait(request)
         return None
+
+    async def load(self, parameters):
+        # Use regex to extract key-value pairs like 'R255', 'U0', etc.
+        pattern = re.compile(r'([LTZ])(\d+)')
+        params = {match[0]: int(match[1]) for match in pattern.findall(parameters)}
+
+        # Get the RGB, White, Brightness, and Intensity values, defaulting to 0 if not provided
+        length = params.get("L", 25)
+        extruder = params.get("T", 0)
+        zmove = params.get("Z", 0)
+        command = (
+            "G91\n"
+            f"G92 E{extruder}\n"
+            f"G1 Z{zmove} E{length} F{3*60}\n"
+            "G92 E0\n"
+        )
+        print(command)
+        return await self.websocket_handler.send_gcode_and_wait(command)
 
     async def set_led_color(self, parameters):
         # Use regex to extract key-value pairs like 'R255', 'U0', etc.
@@ -351,13 +380,10 @@ class TFTAdapter:
         brightness = params.get("P", 0) / 255.0
         intensity = params.get("I", 0) / 255.0  # Optional if needed
 
-        # Construct the Moonraker SET_LED command
-        moonraker_command = (
+        return await self.websocket_handler.send_gcode_and_wait(
             f"SET_LED LED=statusled RED={red:.3f} GREEN={green:.3f} "
             f"BLUE={blue:.3f} WHITE={white:.3f} BRIGHTNESS={brightness:.3f}"
         )
-
-        return await self.websocket_handler.send_gcode_and_wait(moonraker_command)
 
     def get_temperature(self):
         extruder = self.websocket_handler.latest_values["extruder"]
