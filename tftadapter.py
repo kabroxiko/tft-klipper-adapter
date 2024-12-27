@@ -38,8 +38,6 @@ REPORT_SETTINGS_TEMPLATE = Template(
     "M106 S{{ fan.speed }}"
 )
 
-SOFTWARE_ENDSTOPS_TEMPLATE = Template("Soft endstops: {{ state }}")
-
 FIRMWARE_INFO_TEMPLATE = Template(
     "FIRMWARE_NAME:Klipper {{ mcu.mcu_version }} "
     "SOURCE_CODE_URL:https://github.com/Klipper3d/klipper "
@@ -64,6 +62,8 @@ FIRMWARE_INFO_TEMPLATE = Template(
     "Cap:BUILD_PERCENT:1\n"
     "Cap:CHAMBER_TEMPERATURE:0"
 )
+
+SOFTWARE_ENDSTOPS_TEMPLATE = Template("Soft endstops: {{ state }}")
 
 TRACKED_OBJECTS = {
     "extruder": ["temperature", "target"],
