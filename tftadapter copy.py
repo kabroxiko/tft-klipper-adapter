@@ -6,45 +6,31 @@ from queue import Queue
 from websockets import connect
 import serial
 import re
-from jinja2 import Template
 
+# Global response formats
 MACHINE_TYPE = "Artillery Genius Pro"
-
-# Global response formats in Jinja2
-TEMPERATURE_TEMPLATE = Template(
-    "T:{{ extruder.temperature | round }} /{{ extruder.target | round }} "
-    "B:{{ heater_bed.temperature | round }} /{{ heater_bed.target | round }} "
+TEMPERATURE_FORMAT = (
+    "T:{extruder_temperature:.2f} /{extruder_target:.2f} "
+    "B:{bed_temperature:.2f} /{bed_target:.2f} "
     "@:0 B@:0"
 )
-
-POSITION_TEMPLATE = Template(
-    "X:{{ gcode_move.position[0] | round(2) }} "
-    "Y:{{ gcode_move.position[1] | round(2) }} "
-    "Z:{{ gcode_move.position[2] | round(2) }} "
-    "E:{{ gcode_move.position[3] | round(2) }}"
+POSITION_FORMAT = "X:{x:.2f} Y:{y:.2f} Z:{z:.2f} E:{e:.2f}"
+FEED_RATE_FORMAT = "FR:{fr:.2f}%"
+FLOW_RATE_FORMAT = "E0 Flow: {er:.2f}%"
+REPORT_SETTINGS_FORMAT = (
+    "M203 X{toolhead_max_velocity} Y{toolhead_max_velocity} Z{max_z_velocity} E{max_extrude_only_velocity}\n"
+    "M201 X{toolhead_max_accel} Y{toolhead_max_accel} Z{max_z_accel} E{max_extrude_only_accel}\n"
+    "M206 X{homing_origin_x} Y{homing_origin_y} Z{homing_origin_z}\n"
+    "M851 X{x_offset} Y{y_offset} Z{z_offset}\n"
+    "M420 S1 Z{bed_mesh_fade_end}\n"
+    "M106 S{fan_speed}"
 )
-
-FEED_RATE_TEMPLATE = Template("FR:{{ gcode_move.speed_factor * 100 | int }}%")
-FLOW_RATE_TEMPLATE = Template("E0 Flow:{{ gcode_move.extrude_factor * 100 | int }}%")
-
-REPORT_SETTINGS_TEMPLATE = Template(
-    "M203 X{{ toolhead.max_velocity }} Y{{ toolhead.max_velocity }} "
-    "Z{{ configfile.settings.printer.max_z_velocity }} E{{ configfile.settings.extruder.max_extrude_only_velocity }}\n"
-    "M201 X{{ toolhead.max_accel }} Y{{ toolhead.max_accel }} "
-    "Z{{ configfile.settings.printer.max_z_accel }} E{{ configfile.settings.extruder.max_extrude_only_accel }}\n"
-    "M206 X{{ gcode_move.homing_origin[0] }} Y{{ gcode_move.homing_origin[1] }} Z{{ gcode_move.homing_origin[2] }}\n"
-    "M851 X{{ configfile.settings.bltouch.x_offset }} Y{{ configfile.settings.bltouch.y_offset }} Z{{ configfile.settings.bltouch.z_offset }}\n"
-    "M420 S1 Z{{ configfile.settings.bed_mesh.fade_end }}\n"
-    "M106 S{{ fan.speed }}"
-)
-
-SOFTWARE_ENDSTOPS_TEMPLATE = Template("Soft endstops: {{ state }}")
-
-FIRMWARE_INFO_TEMPLATE = Template(
-    "FIRMWARE_NAME:Klipper {{ mcu.mcu_version }} "
+SOFTWARE_ENDSTOPS_FORMAT = "Soft endstops: {state}"
+FIRMWARE_INFO_FORMAT = (
+    "FIRMWARE_NAME:Klipper {mcu_version} "
     "SOURCE_CODE_URL:https://github.com/Klipper3d/klipper "
     "PROTOCOL_VERSION:1.0 "
-    f"MACHINE_TYPE:{MACHINE_TYPE}\n"
+    "MACHINE_TYPE: {machine_type}\n"
     "Cap:EEPROM:1\n"
     "Cap:AUTOREPORT_TEMP:1\n"
     "Cap:AUTOREPORT_POS:1\n"
@@ -72,8 +58,7 @@ TRACKED_OBJECTS = {
     "toolhead": ["max_velocity", "max_accel"],
     "mcu": ["mcu_version"],
     "configfile": ["settings"],
-    "fan": ["speed"],
-    "filament_switch_sensor filament_sensor": None
+    "fan": ["speed"]
 }
 
 class SerialHandler:
@@ -107,7 +92,7 @@ class WebSocketHandler:
     def __init__(self, websocket_url, message_queue):
         self.websocket_url = websocket_url
         self.message_queue = message_queue
-        self.latest_values = {}
+        self.latest_values = {}  # Start with an empty dictionary
         self.file_list = []  # Cache of the file list
 
     async def handler(self, websocket):
@@ -147,7 +132,7 @@ class WebSocketHandler:
             "jsonrpc": "2.0",
             "method": "printer.objects.subscribe",
             "params": {
-                "objects": TRACKED_OBJECTS
+                "objects": OBJECTS
             }
         })
         await websocket.send(subscription_message)
@@ -270,8 +255,8 @@ class TFTAdapter:
                 gcode = self.gcode_queue.get()
                 logging.info(f"Processing G-code: {gcode}")
                 response = await self.handle_gcode(gcode)
-                if response != "":
-                    self.serial_handler.write_response("ok" if f"{response}" == "None" else response)
+                if response != "";
+                self.serial_handler.write_response("ok" if f"{response}" == "None" else response)
             await asyncio.sleep(0.1)
 
     async def periodic_position_update(self):
@@ -382,6 +367,7 @@ class TFTAdapter:
             f"G1 Z{zmove} E{length} F{3*60}\n"
             "G92 E0\n"
         )
+        print(command)
         return await self.websocket_handler.send_gcode_and_wait(command)
 
     async def set_led_color(self, parameters):
@@ -403,26 +389,67 @@ class TFTAdapter:
         )
 
     def get_temperature(self):
-        return TEMPERATURE_TEMPLATE.render(**self.websocket_handler.latest_values)
+        extruder = self.websocket_handler.latest_values["extruder"]
+        heater_bed = self.websocket_handler.latest_values["heater_bed"]
+        return TEMPERATURE_FORMAT.format(
+            extruder_temperature=extruder['temperature'],
+            extruder_target=extruder['target'],
+            bed_temperature=heater_bed['temperature'],
+            bed_target=heater_bed['target']
+        )
 
     def get_position(self):
-        return POSITION_TEMPLATE.render(**self.websocket_handler.latest_values)
+        position = self.websocket_handler.latest_values["gcode_move"]["position"]
+        return POSITION_FORMAT.format(
+            x=position[0],
+            y=position[1],
+            z=position[2],
+            e=position[3]
+        )
 
     def get_feed_rate(self, gcode):
-        return FEED_RATE_TEMPLATE.render(**self.websocket_handler.latest_values)
+        flow_rate = self.websocket_handler.latest_values["gcode_move"]["speed_factor"] * 100
+        return FEED_RATE_FORMAT.format(fr=flow_rate)
 
     def get_flow_rate(self, gcode):
-        return FLOW_RATE_TEMPLATE.render(**self.websocket_handler.latest_values)
+        extrude_rate = self.websocket_handler.latest_values["gcode_move"]["extrude_factor"] * 100
+        return FLOW_RATE_FORMAT.format(er=extrude_rate)
 
     def get_report_settings(self):
-        return REPORT_SETTINGS_TEMPLATE.render(**self.websocket_handler.latest_values)
+        # Access the latest values from the WebSocket
+        toolhead = self.websocket_handler.latest_values["toolhead"]
+        config = self.websocket_handler.latest_values["configfile"]["settings"]
+        gcode_move = self.websocket_handler.latest_values["gcode_move"]
+        fan = self.websocket_handler.latest_values["fan"]
+
+        # Format the M503 response using the global variables
+        return REPORT_SETTINGS_FORMAT.format(
+            toolhead_max_velocity=toolhead["max_velocity"],
+            max_z_velocity=config["printer"]["max_z_velocity"],
+            max_extrude_only_velocity=config["extruder"]["max_extrude_only_velocity"],
+            toolhead_max_accel=toolhead["max_accel"],
+            max_z_accel=config["printer"]["max_z_accel"],
+            max_extrude_only_accel=config["extruder"]["max_extrude_only_accel"],
+            homing_origin_x=gcode_move["homing_origin"][0],
+            homing_origin_y=gcode_move["homing_origin"][1],
+            homing_origin_z=gcode_move["homing_origin"][2],
+            x_offset=config.get('bltouch', config.get('probe'))["x_offset"],
+            y_offset=config.get('bltouch', config.get('probe'))["y_offset"],
+            z_offset=config.get('bltouch', config.get('probe'))["z_offset"],
+            bed_mesh_fade_end=config["bed_mesh"]["fade_end"],
+            fan_speed=fan["speed"] * 255.0  # Convert fan speed to PWM value
+        )
 
     def get_firmware_info(self):
-        return FIRMWARE_INFO_TEMPLATE.render(**self.websocket_handler.latest_values)
+        mcu_version = self.websocket_handler.latest_values["mcu"]["mcu_version"]
+        return FIRMWARE_INFO_FORMAT.format(
+            mcu_version=mcu_version,
+            machine_type=MACHINE_TYPE
+        )
 
     def get_software_endstops(self):
-        state = {"state": "On" if self.websocket_handler.latest_values["filament_switch_sensor filament_sensor"]["enabled"] else "Off"}  # Replace with actual logic to determine soft endstops state
-        return SOFTWARE_ENDSTOPS_TEMPLATE.render(**state)
+        state = "On"  # Replace with actual logic to determine soft endstops state
+        return SOFTWARE_ENDSTOPS_FORMAT.format(state=state)
 
     def get_file_list(self):
         """Format the file list as required for M20."""
