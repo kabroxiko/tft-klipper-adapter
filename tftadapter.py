@@ -255,7 +255,8 @@ class TFTAdapter:
                 gcode = self.gcode_queue.get()
                 logging.info(f"Processing G-code: {gcode}")
                 response = await self.handle_gcode(gcode)
-                self.serial_handler.write_response("ok" if f"{response}" == "None" else response)
+                if response != "":
+                    self.serial_handler.write_response("ok" if f"{response}" == "None" else response)
             await asyncio.sleep(0.1)
 
     async def periodic_position_update(self):
@@ -331,33 +332,35 @@ class TFTAdapter:
         elif gcode == "M524":
             return await self.websocket_handler.send_gcode_and_wait("CANCEL_PRINT")
         elif gcode == "M701":
-            return await self.load(parameters)
+            return await self.load()
         elif gcode == "M702":
             return await self.websocket_handler.send_gcode_and_wait("CANCEL_PRINT")
         elif gcode == "M118":
-            # TODO
-            parts = parameters.split()
+            return ""
+        #     # TODO
+        #     parts = parameters.split()
 
-            return await self.websocket_handler.send_gcode_and_wait("CANCEL_PRINT")
-            return await self.websocket_handler.send_gcode_and_wait(request)
-        elif gcode in ("M851", "M420", "M22", "M108"):
+        #     return await self.websocket_handler.send_gcode_and_wait("CANCEL_PRINT")
+        #     return await self.websocket_handler.send_gcode_and_wait(request)
+        elif gcode in ("M851", "M420", "M22"):
             # Unknown commands
             return "ok"
+        elif gcode in ("M108"):
+            # Ignored command
+            return ""
         elif gcode in ("M92", "T0"):
             return "ok"
         else:
             return await self.websocket_handler.send_gcode_and_wait(request)
         return None
 
-    async def load(self, parameters):
-        # Use regex to extract key-value pairs like 'R255', 'U0', etc.
+    async def load(self, parameters="L25 T0 Z0"):
         pattern = re.compile(r'([LTZ])(\d+)')
         params = {match[0]: int(match[1]) for match in pattern.findall(parameters)}
 
-        # Get the RGB, White, Brightness, and Intensity values, defaulting to 0 if not provided
-        length = params.get("L", 25)
-        extruder = params.get("T", 0)
-        zmove = params.get("Z", 0)
+        length = params.get("L")
+        extruder = params.get("T")
+        zmove = params.get("Z")
         command = (
             "G91\n"
             f"G92 E{extruder}\n"
