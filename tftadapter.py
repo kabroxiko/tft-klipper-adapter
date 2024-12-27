@@ -421,7 +421,7 @@ class TFTAdapter:
         return FIRMWARE_INFO_TEMPLATE.render(**self.websocket_handler.latest_values)
 
     def get_software_endstops(self):
-        state = {"state": "On" if self.websocket_handler.latest_values["filament_switch_sensor filament_sensor"]["enabled"] else "Off"}  # Replace with actual logic to determine soft endstops state
+        state = {"state": "On" if self.websocket_handler.latest_values["filament_switch_sensor filament_sensor"]["enabled"] else "Off"}
         return SOFTWARE_ENDSTOPS_TEMPLATE.render(**state)
 
     def get_file_list(self):
