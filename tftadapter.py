@@ -80,7 +80,7 @@ SOFTWARE_ENDSTOPS_TEMPLATE = Template(
 
 FILE_LIST_TEMPLATE = Template(
     "Begin file list\n"
-    "{% for file in file_list %}{{ file.path }} {{ file.size }}\n{% endfor %}"
+    "{% for path, details in file_list.items() %}{{ path }} {{ details.size }}\n{% endfor %}"
     "End file list\n"
     "ok"
 )
@@ -128,7 +128,6 @@ class WebSocketHandler:
         self.websocket_url = websocket_url
         self.message_queue = message_queue
         self.latest_values = {}
-        self.file_list = []  # Cache of the file list
         self.retry_delay = 1
 
     async def handler(self):
@@ -174,9 +173,6 @@ class WebSocketHandler:
         logging.info(f"result: {result}")
         self.latest_values = result.get("status")
         logging.info("Initialized latest values from printer.")
-
-        # Query file list
-        await self.query_file_list(websocket)
 
     async def subscribe_to_printer_objects(self, websocket):
         subscription_message = json.dumps({
@@ -230,51 +226,25 @@ class WebSocketHandler:
                     self.update_latest_values(data.get("params")[0])
                 elif data.get("method") == "notify_gcode_response":
                     self.message_queue.put(data["params"][0])
-                elif data.get("method") == "notify_filelist_changed":
-                    file_path = data["params"][0].get("item").get("path")
-                    if file_path.endswith(".gcode"):
-                        self.update_file_list(data["params"][0])
         except Exception as e:
             logging.error(f"Error processing WebSocket message: {e}")
 
-    def update_file_list(self, params):
-        item = params.get("item")
-        action = params.get("action")
-        file_path = item.get("path")
-        file_size = item.get("size", 0)
-        if action == "create_file":
-            self.file_list.insert(0, {"path": file_path, "size": file_size})
-            logging.info(f"Added new file to file_list: {file_path}")
-        elif action == "modify_file":
-            for i, file in enumerate(self.file_list):
-                if file.get("path") == file_path:
-                    self.file_list[i]["size"] = file_size
-                    logging.info(f"Updated size for {file_path}: {file_size}")
-                    break
-        elif action == "delete_file":
-            self.file_list = [file for file in self.file_list if file.get("path") != file_path]
-            logging.info(f"File {file_path} removed from file list.")
-        logging.info(f"self.file_list: {self.file_list}")
-
-    async def query_file_list(self, websocket):
+    async def query_file_list(self):
         """Query the list of files from Moonraker."""
         try:
             file_query_message = json.dumps({
                 "jsonrpc": "2.0",
                 "method": "server.files.list",
-                "params": {
-                    "path": ""  # Query root directory or adjust as needed
-                },
+                "params": {"path": ""},  # Root directory or adjust as needed
                 "id": 2
             })
-            await websocket.send(file_query_message)
-            while True:
-                response = json.loads(await websocket.recv())
-                if response.get("id") == 2:
-                    logging.info(f"response: {response}")
-                    self.file_list = response.get("result")
-                    logging.info(f"Updated file list: {self.file_list}")
-                    break
+            async with connect(self.websocket_url) as websocket:
+                await websocket.send(file_query_message)
+                while True:
+                    response = json.loads(await websocket.recv())
+                    if response.get("id") == 2:
+                        result = response.get("result", [])
+                        return {file["path"]: {"size": file["size"]} for file in result}
         except Exception as e:
             logging.error(f"Error querying file list: {e}")
 
@@ -349,7 +319,7 @@ class TFTAdapter:
                 }
                 return template.render(**state)
             elif gcode == "M20":  # List the files stored on the SD card
-                return template.render(file_list=self.websocket_handler.file_list)
+                return GCODE_TEMPLATES[gcode].render(file_list=await self.websocket_handler.query_file_list())
             return template.render(**self.websocket_handler.latest_values)
 
         # Auto-report G-codes
