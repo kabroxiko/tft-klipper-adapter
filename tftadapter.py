@@ -110,12 +110,12 @@ class SerialHandler:
             logging.error(f"Error initializing serial connection: {e}")
             raise
 
-    def read_gcode(self):
+    def read(self):
         if self.connection.in_waiting > 0:
             return self.connection.readline().decode("utf-8").strip()
         return None
 
-    def write_response(self, message):
+    def write(self, message):
         try:
             self.connection.write((message + "\n").encode("utf-8"))
             logging.info(f"Sent to TFT: {message}")
@@ -189,14 +189,15 @@ class WebSocketHandler:
         await websocket.send(subscription_message)
         logging.info("Subscribed to printer object updates.")
 
-    async def send_gcode_and_wait(self, gcode):
+    async def call_moonraker_script(self, script):
         """Send a G-code to Moonraker and wait for the response."""
         try:
             message_id = 100  # You can implement an incrementing ID for unique requests
+            logging.info(f"Call moonraker script: {script}")
             gcode_message = json.dumps({
                 "jsonrpc": "2.0",
                 "method": "printer.gcode.script",
-                "params": {"script": gcode},
+                "params": {"script": script},
                 "id": message_id
             })
             # Send the G-code
@@ -294,9 +295,9 @@ class TFTAdapter:
 
     async def serial_reader(self):
         while True:
-            gcode = self.serial_handler.read_gcode()
+            gcode = self.serial_handler.read()
             if gcode:
-                logging.info(f"Received G-code from serial: {gcode}")
+                logging.debug(f"Received G-code from serial: {gcode}")
                 self.gcode_queue.put(gcode)
             await asyncio.sleep(0.1)
 
@@ -307,7 +308,7 @@ class TFTAdapter:
                 logging.info(f"Processing G-code: {gcode}")
                 response = await self.handle_gcode(gcode)
                 if response != "":
-                    self.serial_handler.write_response(
+                    self.serial_handler.write(
                         "ok" if f"{response}" == "None" else response
                     )
             await asyncio.sleep(0.1)
@@ -316,7 +317,7 @@ class TFTAdapter:
         while True:
             interval = getattr(self, auto_report_interval, 0)
             if interval and interval > 0:
-                self.serial_handler.write_response(
+                self.serial_handler.write(
                     f"ok {template.render(**self.websocket_handler.latest_values)}"
                 )
                 await asyncio.sleep(interval)
@@ -352,7 +353,7 @@ class TFTAdapter:
             return template.render(**self.websocket_handler.latest_values)
 
         # Auto-report G-codes
-        if gcode == "M154":
+        elif gcode == "M154":
             self.auto_report_position = int(parameters[1:]) if parameters else None
         elif gcode == "M155":
             self.auto_report_temperature = int(parameters[1:]) if parameters else None
@@ -367,17 +368,17 @@ class TFTAdapter:
                 command = f"SET_VELOCITY_LIMIT VELOCITY={parameters[1:]}"
             elif gcode == "M206" and parameters.startswith("X", "Y", "Z", "E"):
                 command = f"SET_GCODE_OFFSET {parameters[:1]}={parameters[1:]}"
-            return await self.websocket_handler.send_gcode_and_wait(command)
+            return await self.websocket_handler.call_moonraker_script(command)
 
         elif gcode == "M150":
             return await self.set_led_color(parameters)
         elif gcode == "M524":
-            return await self.websocket_handler.send_gcode_and_wait("CANCEL_PRINT")
+            return await self.websocket_handler.call_moonraker_script("CANCEL_PRINT")
         elif gcode in ("M701", "M702"):
             action = "load" if gcode == "M701" else "unload"
             return await self.handle_filament(parameters, action=action)
         elif gcode == "M118":
-            return await self.websocket_handler.send_gcode_and_wait(request)
+            return await self.websocket_handler.call_moonraker_script(request)
 
         # Commands with no action or immediate acknowledgment
         elif gcode in {"M851", "M420", "M22", "M92", "T0"}:
@@ -385,7 +386,7 @@ class TFTAdapter:
         elif gcode == "M108":
             return ""
         elif gcode in {"M21", "G90", "M82"}:
-            return await self.websocket_handler.send_gcode_and_wait(request)
+            return await self.websocket_handler.call_moonraker_script(request)
 
         # Fallback for unknown commands
         else:
@@ -406,25 +407,21 @@ class TFTAdapter:
             f"G1 Z{zmove} E{direction * length} F{3*60}\n"  # Extrude or Retract
             "G92 E0\n"            # Reset Extruder
         )
-        return await self.websocket_handler.send_gcode_and_wait(command)
+        return await self.websocket_handler.call_moonraker_script(command)
 
     async def set_led_color(self, parameters):
-        # Use regex to extract key-value pairs like 'R255', 'U0', etc.
-        pattern = re.compile(r'([RUBWPI])(\d+)')
-        params = {match[0]: int(match[1]) for match in pattern.findall(parameters)}
+        params = {k: int(v) / 255.0 for k, v in re.findall(r'([RUBWPI])(\d+)', parameters)}
 
-        # Get the RGB, White, Brightness, and Intensity values, defaulting to 0 if not provided
-        red = params.get("R", 0) / 255.0
-        green = params.get("U", 0) / 255.0
-        blue = params.get("B", 0) / 255.0
-        white = params.get("W", 0) / 255.0
-        brightness = params.get("P", 0) / 255.0
-        intensity = params.get("I", 0) / 255.0  # Optional if needed
-
-        return await self.websocket_handler.send_gcode_and_wait(
-            f"SET_LED LED=statusled RED={red:.3f} GREEN={green:.3f} "
-            f"BLUE={blue:.3f} WHITE={white:.3f} BRIGHTNESS={brightness:.3f}"
+        gcode = (
+            f"SET_LED LED=statusled "
+            f"RED={params.get('R', 0):.3f} "
+            f"GREEN={params.get('U', 0):.3f} "
+            f"BLUE={params.get('B', 0):.3f} "
+            f"WHITE={params.get('W', 0):.3f} "
+            f"BRIGHTNESS={params.get('P', 0):.3f}"
         )
+
+        return await self.websocket_handler.call_moonraker_script(gcode)
 
 async def main():
     parser = argparse.ArgumentParser(description="TFT Adapter for Moonraker and Artillery TFT.")
