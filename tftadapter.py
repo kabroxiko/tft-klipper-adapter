@@ -312,23 +312,14 @@ class TFTAdapter:
                     )
             await asyncio.sleep(0.1)
 
-    async def periodic_position_update(self):
+    async def periodic_update_report(self, auto_report_interval, template):
         while True:
-            if self.auto_report_position and self.auto_report_position > 0:
+            interval = getattr(self, auto_report_interval, 0)
+            if interval and interval > 0:
                 self.serial_handler.write_response(
-                    f"ok {POSITION_TEMPLATE.render(**self.websocket_handler.latest_values)}"
+                    f"ok {template.render(**self.websocket_handler.latest_values)}"
                 )
-                await asyncio.sleep(self.auto_report_position)
-            else:
-                await asyncio.sleep(1)
-
-    async def periodic_temperature_update(self):
-        while True:
-            if self.auto_report_temperature and self.auto_report_temperature > 0:
-                self.serial_handler.write_response(
-                    f"ok {TEMPERATURE_TEMPLATE.render(**self.websocket_handler.latest_values)}"
-                )
-                await asyncio.sleep(self.auto_report_temperature)
+                await asyncio.sleep(interval)
             else:
                 await asyncio.sleep(1)
 
@@ -369,21 +360,15 @@ class TFTAdapter:
             return f"{parameters}\nok"
 
         # Special G-codes with parameter-specific behavior
-        elif gcode == "M201" and parameters:
-            if parameters.startswith(("X", "Y")):
-                max_acceleration = parameters[1:]
-                return await self.websocket_handler.send_gcode_and_wait(
-                    f"SET_VELOCITY_LIMIT ACCEL={max_acceleration} ACCEL_TO_DECEL={int(max_acceleration) / 2}"
-                )
-        elif gcode == "M203" and parameters.startswith(("X", "Y")):
-            max_velocity = parameters[1:]
-            return await self.websocket_handler.send_gcode_and_wait(
-                f"SET_VELOCITY_LIMIT VELOCITY={max_velocity}"
-            )
-        elif gcode == "M206" and parameters.startswith(("X", "Y", "Z", "E")):
-            return await self.websocket_handler.send_gcode_and_wait(
-                f"SET_GCODE_OFFSET {parameters[:1]}={parameters[1:]}"
-            )
+        elif gcode in ("M201", "M203", "M206"):
+            if gcode == "M201" and parameters.startswith(("X", "Y")):
+                command = f"SET_VELOCITY_LIMIT ACCEL={parameters[1:]} ACCEL_TO_DECEL={int(parameters[1:]) / 2}"
+            elif gcode == "M203" and parameters.startswith(("X", "Y")):
+                command = f"SET_VELOCITY_LIMIT VELOCITY={parameters[1:]}"
+            elif gcode == "M206" and parameters.startswith("X", "Y", "Z", "E"):
+                command = f"SET_GCODE_OFFSET {parameters[:1]}={parameters[1:]}"
+            return await self.websocket_handler.send_gcode_and_wait(command)
+
         elif gcode == "M150":
             return await self.set_led_color(parameters)
         elif gcode == "M524":
@@ -465,8 +450,12 @@ async def main():
         websocket_handler.handler(),
         tft_adapter.serial_reader(),
         tft_adapter.process_gcode_queue(),
-        tft_adapter.periodic_position_update(),
-        tft_adapter.periodic_temperature_update()
+        tft_adapter.periodic_update_report(
+            "auto_report_position", POSITION_TEMPLATE
+        ),
+        tft_adapter.periodic_update_report(
+            "auto_report_temperature", TEMPERATURE_TEMPLATE
+        )
     )
 
 if __name__ == "__main__":
