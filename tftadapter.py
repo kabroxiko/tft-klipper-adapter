@@ -330,14 +330,14 @@ class TFTAdapter:
 
         # Predefined G-code handlers
         GCODE_TEMPLATES = {
-            "M105": TEMPERATURE_TEMPLATE,
-            "M114": POSITION_TEMPLATE,
-            "M220": FEED_RATE_TEMPLATE,
-            "M221": FLOW_RATE_TEMPLATE,
-            "M503": REPORT_SETTINGS_TEMPLATE,
-            "M115": FIRMWARE_INFO_TEMPLATE,
-            "M211": SOFTWARE_ENDSTOPS_TEMPLATE,
-            "M20":  FILE_LIST_TEMPLATE,
+            "M105": TEMPERATURE_TEMPLATE,       # Report current temperatures
+            "M114": POSITION_TEMPLATE,          # Report current position
+            "M220": FEED_RATE_TEMPLATE,         # Set or report feed rate percentage
+            "M221": FLOW_RATE_TEMPLATE,         # Set or report flow rate percentage
+            "M503": REPORT_SETTINGS_TEMPLATE,   # Report current settings
+            "M115": FIRMWARE_INFO_TEMPLATE,     # Report firmware information
+            "M211": SOFTWARE_ENDSTOPS_TEMPLATE, # Enable/disable software endstops
+            "M20":  FILE_LIST_TEMPLATE,         # List files on the SD card
         }
 
         # Direct handlers
@@ -348,44 +348,49 @@ class TFTAdapter:
                     "state": "On" if self.websocket_handler.latest_values["filament_switch_sensor filament_sensor"]["enabled"] else "Off"
                 }
                 return template.render(**state)
-            elif gcode == "M20":
+            elif gcode == "M20":  # List the files stored on the SD card
                 return template.render(file_list=self.websocket_handler.file_list)
             return template.render(**self.websocket_handler.latest_values)
 
         # Auto-report G-codes
-        elif gcode == "M154":
+        elif gcode == "M154":  # Enable/disable auto-reporting of position
             self.auto_report_position = int(parameters[1:]) if parameters else None
-        elif gcode == "M155":
+        elif gcode == "M155":  # Enable/disable auto-reporting of temperature
             self.auto_report_temperature = int(parameters[1:]) if parameters else None
-        elif gcode == "M33":
+        elif gcode == "M33":  # Mock response for SD card operations
             return f"{parameters}\nok"
 
         # Special G-codes with parameter-specific behavior
         elif gcode in ("M201", "M203", "M206"):
-            if gcode == "M201" and parameters.startswith(("X", "Y")):
+            if gcode == "M201" and parameters.startswith(("X", "Y")):  # Set maximum acceleration
                 command = f"SET_VELOCITY_LIMIT ACCEL={parameters[1:]} ACCEL_TO_DECEL={int(parameters[1:]) / 2}"
-            elif gcode == "M203" and parameters.startswith(("X", "Y")):
+            elif gcode == "M203" and parameters.startswith(("X", "Y")):  # Set maximum feedrate
                 command = f"SET_VELOCITY_LIMIT VELOCITY={parameters[1:]}"
-            elif gcode == "M206" and parameters.startswith("X", "Y", "Z", "E"):
+            elif gcode == "M206" and parameters.startswith("X", "Y", "Z", "E"):  # Set home offset
                 command = f"SET_GCODE_OFFSET {parameters[:1]}={parameters[1:]}"
             return await self.websocket_handler.call_moonraker_script(command)
 
-        elif gcode == "M150":
+        elif gcode == "M150":  # Set LED color
             return await self.set_led_color(parameters)
-        elif gcode == "M524":
+        elif gcode == "M524":  # Cancel current print
             return await self.websocket_handler.call_moonraker_script("CANCEL_PRINT")
-        elif gcode in ("M701", "M702"):
+        elif gcode in ("M701", "M702"):  # Filament load/unload
             action = "load" if gcode == "M701" else "unload"
             return await self.handle_filament(parameters, action=action)
-        elif gcode == "M118":
+        elif gcode == "M118":  # Display message
             return await self.websocket_handler.call_moonraker_script(request)
 
         # Commands with no action or immediate acknowledgment
-        elif gcode in {"M851", "M420", "M22", "M92", "T0"}:
+        elif gcode in {"M851", "M420", "M22", "M92", "T0"}:  # Acknowledge with "ok"
+            # M851: Probe Z-offset
+            # M420: Enable/Disable bed leveling
+            # M22: Release the SD card
+            # M92: Set axis steps per unit
+            # T0: Select tool 0
             return "ok"
-        elif gcode == "M108":
+        elif gcode == "M108":  # Special empty response
             return ""
-        elif gcode in {"M21", "G90", "M82"}:
+        elif gcode in {"M21", "G90", "M82"}:  # Send directly to Moonraker
             return await self.websocket_handler.call_moonraker_script(request)
 
         # Fallback for unknown commands
