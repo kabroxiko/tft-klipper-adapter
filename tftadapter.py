@@ -12,8 +12,8 @@ MACHINE_TYPE = "Artillery Genius Pro"
 
 # Global response formats in Jinja2
 TEMPERATURE_TEMPLATE = Template(
-    "T:{{ extruder.temperature | round }} /{{ extruder.target | round }} "
-    "B:{{ heater_bed.temperature | round }} /{{ heater_bed.target | round }} "
+    "T:{{ extruder.temperature | round(2) }} /{{ extruder.target | round(2) }} "
+    "B:{{ heater_bed.temperature | round(2) }} /{{ heater_bed.target | round(2) }} "
     "@:0 B@:0"
 )
 
@@ -109,15 +109,31 @@ class WebSocketHandler:
         self.message_queue = message_queue
         self.latest_values = {}
         self.file_list = []  # Cache of the file list
+        self.retry_delay = 1
 
-    async def handler(self, websocket):
-        await self.subscribe_to_printer_objects(websocket)
+    async def handler(self):
+        """Handle WebSocket messages and ensure reconnection."""
         while True:
             try:
+                async with connect(self.websocket_url) as websocket:
+                    logging.info("Connected to WebSocket.")
+                    await self.initialize_values(websocket)
+                    await self.subscribe_to_printer_objects(websocket)
+                    await self.listen_to_websocket(websocket)
+            except Exception as e:
+                logging.error(f"WebSocket connection error: {e}. Retrying in {self.retry_delay} seconds...")
+                await asyncio.sleep(self.retry_delay)
+                self.retry_delay = min(self.retry_delay * 2, 60)  # Exponential backoff, max 60 seconds
+
+    async def listen_to_websocket(self, websocket):
+        """Listen to WebSocket messages and process them."""
+        try:
+            while True:
                 message = await websocket.recv()
                 self.handle_message(message)
-            except Exception as e:
-                logging.error(f"Error in WebSocket handler: {e}")
+        except Exception as e:
+            logging.error(f"Error in WebSocket listener: {e}")
+            raise  # Trigger reconnection
 
     async def initialize_values(self, websocket):
         """Initialize the latest values and file list from the printer."""
@@ -454,15 +470,13 @@ async def main():
 
     serial_handler.initialize()
 
-    async with connect(args.websocket_url) as websocket:
-        await websocket_handler.initialize_values(websocket)
-        await asyncio.gather(
-            websocket_handler.handler(websocket),
-            tft_adapter.serial_reader(),
-            tft_adapter.process_gcode_queue(),
-            tft_adapter.periodic_temperature_update(),
-            tft_adapter.periodic_position_update()
-        )
+    await asyncio.gather(
+        websocket_handler.handler(),
+        tft_adapter.serial_reader(),
+        tft_adapter.process_gcode_queue(),
+        tft_adapter.periodic_position_update(),
+        tft_adapter.periodic_temperature_update()
+    )
 
 if __name__ == "__main__":
     asyncio.run(main())
