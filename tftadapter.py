@@ -14,18 +14,26 @@ MACHINE_TYPE = "Artillery Genius Pro"
 TEMPERATURE_TEMPLATE = Template(
     "T:{{ extruder.temperature | round(2) }} /{{ extruder.target | round(2) }} "
     "B:{{ heater_bed.temperature | round(2) }} /{{ heater_bed.target | round(2) }} "
-    "@:0 B@:0"
+    "@:0 B@:0\n"
+    "ok"
 )
 
 POSITION_TEMPLATE = Template(
     "X:{{ gcode_move.position[0] | round(2) }} "
     "Y:{{ gcode_move.position[1] | round(2) }} "
     "Z:{{ gcode_move.position[2] | round(2) }} "
-    "E:{{ gcode_move.position[3] | round(2) }}"
+    "E:{{ gcode_move.position[3] | round(2) }}\n"
+    "ok"
 )
 
-FEED_RATE_TEMPLATE = Template("FR:{{ gcode_move.speed_factor * 100 | int }}%")
-FLOW_RATE_TEMPLATE = Template("E0 Flow:{{ gcode_move.extrude_factor * 100 | int }}%")
+FEED_RATE_TEMPLATE = Template(
+    "FR:{{ gcode_move.speed_factor * 100 | int }}%\n"
+    "ok"
+)
+FLOW_RATE_TEMPLATE = Template(
+    "E0 Flow:{{ gcode_move.extrude_factor * 100 | int }}%\n"
+    "ok"
+)
 
 REPORT_SETTINGS_TEMPLATE = Template(
     "M203 X{{ toolhead.max_velocity }} Y{{ toolhead.max_velocity }} "
@@ -35,7 +43,8 @@ REPORT_SETTINGS_TEMPLATE = Template(
     "M206 X{{ gcode_move.homing_origin[0] }} Y{{ gcode_move.homing_origin[1] }} Z{{ gcode_move.homing_origin[2] }}\n"
     "M851 X{{ configfile.settings.bltouch.x_offset }} Y{{ configfile.settings.bltouch.y_offset }} Z{{ configfile.settings.bltouch.z_offset }}\n"
     "M420 S1 Z{{ configfile.settings.bed_mesh.fade_end }}\n"
-    "M106 S{{ fan.speed }}"
+    "M106 S{{ fan.speed }}\n"
+    "ok"
 )
 
 FIRMWARE_INFO_TEMPLATE = Template(
@@ -60,10 +69,21 @@ FIRMWARE_INFO_TEMPLATE = Template(
     "Cap:LONG_FILENAME:1\n"
     "Cap:BABYSTEPPING:1\n"
     "Cap:BUILD_PERCENT:1\n"
-    "Cap:CHAMBER_TEMPERATURE:0"
+    "Cap:CHAMBER_TEMPERATURE:0\n"
+    "ok"
 )
 
-SOFTWARE_ENDSTOPS_TEMPLATE = Template("Soft endstops: {{ state }}")
+SOFTWARE_ENDSTOPS_TEMPLATE = Template(
+    "Soft endstops: {{ state }}\n"
+    "ok"
+)
+
+FILE_LIST_TEMPLATE = Template(
+    "Begin file list\n"
+    "{% for file in file_list %}{{ file.path }} {{ file.size }}\n{% endfor %}"
+    "End file list\n"
+    "ok"
+)
 
 TRACKED_OBJECTS = {
     "extruder": ["temperature", "target"],
@@ -307,98 +327,93 @@ class TFTAdapter:
                 await asyncio.sleep(1)
 
     async def handle_gcode(self, request):
-        parts = request.split()
-        gcode = parts[0]
-        parameters = " ".join(request.split()[1:]) if len(parts) > 1 else None
+        gcode, *parameters = request.split(maxsplit=1)
+        parameters = parameters[0] if parameters else None
 
-        if gcode == "M211":
-            return f"{self.get_software_endstops()}\nok"
-        elif gcode == "M115":
-            return f"{self.get_firmware_info()}\nok"
-        elif gcode == "M503":
-            return f"{self.get_report_settings()}\nok"
-        elif gcode == "M154":
-            parts = request.split()
-            self.auto_report_position = int(parameters[1:]) if len(parts) > 1 else None
+        # Predefined G-code handlers
+        gcode_handlers = {
+            "M211": lambda: f"{self.get_software_endstops()}",
+            "M115": lambda: f"{self.get_firmware_info()}",
+            "M503": lambda: f"{self.get_report_settings()}",
+            "M105": lambda: f"{self.get_temperature()}",
+            "M114": lambda: f"{self.get_position()}",
+            "M220": lambda: f"{self.get_feed_rate(gcode)}",
+            "M221": lambda: f"{self.get_flow_rate(gcode)}",
+            "M20":  lambda: f"{self.get_file_list(gcode)}",
+        }
+
+        # Direct handlers
+        if gcode in gcode_handlers:
+            return gcode_handlers[gcode]()
+
+        # Auto-report G-codes
+        if gcode == "M154":
+            self.auto_report_position = int(parameters[1:]) if parameters else None
         elif gcode == "M155":
-            parts = request.split()
-            self.auto_report_temperature = int(parameters[1:]) if len(parts) > 1 else None
-        elif gcode == "M105":
-            return f"{self.get_temperature()}\nok"
-        elif gcode == "M114":
-            return f"{self.get_position()}\nok"
-        elif request == "M220":
-            return f"{self.get_feed_rate(gcode)}\nok"
-        elif request == "M221":
-            return f"{self.get_flow_rate(gcode)}\nok"
-        elif gcode == "M20":
-            return self.get_file_list()
+            self.auto_report_temperature = int(parameters[1:]) if parameters else None
         elif gcode == "M33":
-            return f"{request.split(' ')[1]}\nok"
-        elif gcode == "M201":
+            return f"{parameters}\nok"
+
+        # Special G-codes with parameter-specific behavior
+        elif gcode == "M201" and parameters:
             if parameters.startswith(("X", "Y")):
                 max_acceleration = parameters[1:]
                 return await self.websocket_handler.send_gcode_and_wait(
-                    f"SET_VELOCITY_LIMIT "
-                    f"ACCEL={max_acceleration} "
-                    f"ACCEL_TO_DECEL={int(max_acceleration) / 2}"
+                    f"SET_VELOCITY_LIMIT ACCEL={max_acceleration} ACCEL_TO_DECEL={int(max_acceleration) / 2}"
                 )
-            elif parameters.startswith(("Z", "E")):
-                pass # Can't be configured dynamically
-        elif gcode == "M203":
-            if parameters.startswith(("X", "Y")):
-                max_velocity = parameters[1:]
-                return await self.websocket_handler.send_gcode_and_wait(
-                    f"SET_VELOCITY_LIMIT VELOCITY={max_velocity}"
-                )
-            elif parameters.startswith(("Z", "E")):
-                pass # Can't be configured dynamically
-        elif gcode == "M206":
-            if parameters.startswith(("X", "Y", "Z", "E")):
-                return await self.websocket_handler.send_gcode_and_wait(
-                    f"SET_GCODE_OFFSET {parameters[:1]}={parameters[1:]}"
-                )
+        elif gcode == "M203" and parameters.startswith(("X", "Y")):
+            max_velocity = parameters[1:]
+            return await self.websocket_handler.send_gcode_and_wait(
+                f"SET_VELOCITY_LIMIT VELOCITY={max_velocity}"
+            )
+        elif gcode == "M206" and parameters.startswith(("X", "Y", "Z", "E")):
+            return await self.websocket_handler.send_gcode_and_wait(
+                f"SET_GCODE_OFFSET {parameters[:1]}={parameters[1:]}"
+            )
         elif gcode == "M150":
             return await self.set_led_color(parameters)
         elif gcode == "M524":
             return await self.websocket_handler.send_gcode_and_wait("CANCEL_PRINT")
-        elif gcode == "M701":
-            return await self.load()
-        elif gcode == "M702":
-            return await self.websocket_handler.send_gcode_and_wait("CANCEL_PRINT")
+        elif gcode in ("M701", "M702"):
+            action = "load" if gcode == "M701" else "unload"
+            return await self.handle_filament(parameters, action=action)
         elif gcode == "M118":
-            return ""
-        #     # TODO
-        #     parts = parameters.split()
-
-        #     return await self.websocket_handler.send_gcode_and_wait("CANCEL_PRINT")
-        #     return await self.websocket_handler.send_gcode_and_wait(request)
-        elif gcode in ("M851", "M420", "M22"):
-            # Unknown commands
-            return "ok"
-        elif gcode in ("M108"):
-            # Ignored command
-            return ""
-        elif gcode in ("M92", "T0"):
-            return "ok"
-        else:
             return await self.websocket_handler.send_gcode_and_wait(request)
-        return None
 
-    async def load(self, parameters="L25 T0 Z0"):
+        # Commands with no action or immediate acknowledgment
+        elif gcode in {"M851", "M420", "M22", "M92", "T0"}:
+            return "ok"
+        elif gcode == "M108":
+            return ""
+        elif gcode in {"M21", "G90", "M82"}:
+            return await self.websocket_handler.send_gcode_and_wait(request)
+
+        # Fallback for unknown commands
+        else:
+            logging.warning(f"Unknown gcode: {request}")
+            return None
+
+    async def handle_filament(self, parameters="L25 T0 Z0", action="load"):
         pattern = re.compile(r'([LTZ])(\d+)')
         params = {match[0]: int(match[1]) for match in pattern.findall(parameters)}
 
-        length = params.get("L")
-        extruder = params.get("T")
-        zmove = params.get("Z")
+        length = params.get("L", 25)
+        extruder = params.get("T", 0)
+        zmove = params.get("Z", 0)
+        direction = 1 if action == "load" else -1
         command = (
-            "G91\n"
-            f"G92 E{extruder}\n"
-            f"G1 Z{zmove} E{length} F{3*60}\n"
-            "G92 E0\n"
+            "G91\n"               # Relative Positioning
+            f"G92 E{extruder}\n"  # Reset Extruder
+            f"G1 Z{zmove} E{direction * length} F{3*60}\n"  # Extrude or Retract
+            "G92 E0\n"            # Reset Extruder
         )
         return await self.websocket_handler.send_gcode_and_wait(command)
+
+    async def load_filament(self, parameters="L25 T0 Z0"):
+        return await self.handle_filament(parameters, direction=1)
+
+    async def unload_filament(self, parameters="L25 T0 Z0"):
+        return await self.handle_filament(parameters, direction=-1)
 
     async def set_led_color(self, parameters):
         # Use regex to extract key-value pairs like 'R255', 'U0', etc.
@@ -418,37 +433,34 @@ class TFTAdapter:
             f"BLUE={blue:.3f} WHITE={white:.3f} BRIGHTNESS={brightness:.3f}"
         )
 
+    def render_template(self, template):
+        return template.render(**self.websocket_handler.latest_values)
+
     def get_temperature(self):
-        return TEMPERATURE_TEMPLATE.render(**self.websocket_handler.latest_values)
+        return self.render_template(TEMPERATURE_TEMPLATE)
 
     def get_position(self):
-        return POSITION_TEMPLATE.render(**self.websocket_handler.latest_values)
+        return self.render_template(POSITION_TEMPLATE)
 
     def get_feed_rate(self, gcode):
-        return FEED_RATE_TEMPLATE.render(**self.websocket_handler.latest_values)
+        return self.render_template(FEED_RATE_TEMPLATE)
 
     def get_flow_rate(self, gcode):
-        return FLOW_RATE_TEMPLATE.render(**self.websocket_handler.latest_values)
+        return self.render_template(FLOW_RATE_TEMPLATE)
 
     def get_report_settings(self):
-        return REPORT_SETTINGS_TEMPLATE.render(**self.websocket_handler.latest_values)
+        return self.render_template(REPORT_SETTINGS_TEMPLATE)
 
     def get_firmware_info(self):
-        return FIRMWARE_INFO_TEMPLATE.render(**self.websocket_handler.latest_values)
+        return self.render_template(FIRMWARE_INFO_TEMPLATE)
 
     def get_software_endstops(self):
         state = {"state": "On" if self.websocket_handler.latest_values["filament_switch_sensor filament_sensor"]["enabled"] else "Off"}
         return SOFTWARE_ENDSTOPS_TEMPLATE.render(**state)
 
     def get_file_list(self):
-        """Format the file list as required for M20."""
-        file_list_str = "Begin file list\n"
-        for file in self.websocket_handler.file_list:
-            filename = file.get("path")
-            size = file.get("size", 0)
-            file_list_str += f"{filename} {size}\n"
-        file_list_str += "End file list\nok"
-        return file_list_str
+        """Format the file list as required for M20 using Jinja2."""
+        return FILE_LIST_TEMPLATE.render(file_list=self.websocket_handler.file_list)
 
 async def main():
     parser = argparse.ArgumentParser(description="TFT Adapter for Moonraker and Artillery TFT.")
