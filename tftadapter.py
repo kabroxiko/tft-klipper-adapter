@@ -307,13 +307,17 @@ class TFTAdapter:
                 logging.info(f"Processing G-code: {gcode}")
                 response = await self.handle_gcode(gcode)
                 if response != "":
-                    self.serial_handler.write_response("ok" if f"{response}" == "None" else response)
+                    self.serial_handler.write_response(
+                        "ok" if f"{response}" == "None" else response
+                    )
             await asyncio.sleep(0.1)
 
     async def periodic_position_update(self):
         while True:
             if self.auto_report_position and self.auto_report_position > 0:
-                self.serial_handler.write_response(f"{self.get_position()}")
+                self.serial_handler.write_response(
+                    f"ok {POSITION_TEMPLATE.render(**self.websocket_handler.latest_values)}"
+                )
                 await asyncio.sleep(self.auto_report_position)
             else:
                 await asyncio.sleep(1)
@@ -321,7 +325,9 @@ class TFTAdapter:
     async def periodic_temperature_update(self):
         while True:
             if self.auto_report_temperature and self.auto_report_temperature > 0:
-                self.serial_handler.write_response(f"ok {self.get_temperature()}")
+                self.serial_handler.write_response(
+                    f"ok {TEMPERATURE_TEMPLATE.render(**self.websocket_handler.latest_values)}"
+                )
                 await asyncio.sleep(self.auto_report_temperature)
             else:
                 await asyncio.sleep(1)
@@ -331,20 +337,28 @@ class TFTAdapter:
         parameters = parameters[0] if parameters else None
 
         # Predefined G-code handlers
-        gcode_handlers = {
-            "M211": lambda: f"{self.get_software_endstops()}",
-            "M115": lambda: f"{self.get_firmware_info()}",
-            "M503": lambda: f"{self.get_report_settings()}",
-            "M105": lambda: f"{self.get_temperature()}",
-            "M114": lambda: f"{self.get_position()}",
-            "M220": lambda: f"{self.get_feed_rate(gcode)}",
-            "M221": lambda: f"{self.get_flow_rate(gcode)}",
-            "M20":  lambda: f"{self.get_file_list(gcode)}",
+        GCODE_TEMPLATES = {
+            "M105": TEMPERATURE_TEMPLATE,
+            "M114": POSITION_TEMPLATE,
+            "M220": FEED_RATE_TEMPLATE,
+            "M221": FLOW_RATE_TEMPLATE,
+            "M503": REPORT_SETTINGS_TEMPLATE,
+            "M115": FIRMWARE_INFO_TEMPLATE,
+            "M211": SOFTWARE_ENDSTOPS_TEMPLATE,
+            "M20":  FILE_LIST_TEMPLATE,
         }
 
         # Direct handlers
-        if gcode in gcode_handlers:
-            return gcode_handlers[gcode]()
+        if gcode in GCODE_TEMPLATES:
+            template = GCODE_TEMPLATES[gcode]
+            if gcode == "M211":  # Special case for software endstops
+                state = {
+                    "state": "On" if self.websocket_handler.latest_values["filament_switch_sensor filament_sensor"]["enabled"] else "Off"
+                }
+                return template.render(**state)
+            elif gcode == "M20":
+                return template.render(file_list=self.websocket_handler.file_list)
+            return template.render(**self.websocket_handler.latest_values)
 
         # Auto-report G-codes
         if gcode == "M154":
@@ -432,35 +446,6 @@ class TFTAdapter:
             f"SET_LED LED=statusled RED={red:.3f} GREEN={green:.3f} "
             f"BLUE={blue:.3f} WHITE={white:.3f} BRIGHTNESS={brightness:.3f}"
         )
-
-    def render_template(self, template):
-        return template.render(**self.websocket_handler.latest_values)
-
-    def get_temperature(self):
-        return self.render_template(TEMPERATURE_TEMPLATE)
-
-    def get_position(self):
-        return self.render_template(POSITION_TEMPLATE)
-
-    def get_feed_rate(self, gcode):
-        return self.render_template(FEED_RATE_TEMPLATE)
-
-    def get_flow_rate(self, gcode):
-        return self.render_template(FLOW_RATE_TEMPLATE)
-
-    def get_report_settings(self):
-        return self.render_template(REPORT_SETTINGS_TEMPLATE)
-
-    def get_firmware_info(self):
-        return self.render_template(FIRMWARE_INFO_TEMPLATE)
-
-    def get_software_endstops(self):
-        state = {"state": "On" if self.websocket_handler.latest_values["filament_switch_sensor filament_sensor"]["enabled"] else "Off"}
-        return SOFTWARE_ENDSTOPS_TEMPLATE.render(**state)
-
-    def get_file_list(self):
-        """Format the file list as required for M20 using Jinja2."""
-        return FILE_LIST_TEMPLATE.render(file_list=self.websocket_handler.file_list)
 
 async def main():
     parser = argparse.ArgumentParser(description="TFT Adapter for Moonraker and Artillery TFT.")
