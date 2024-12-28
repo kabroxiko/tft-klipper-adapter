@@ -423,12 +423,6 @@ class TFTAdapter:
         )
         return await self.websocket_handler.send_gcode_and_wait(command)
 
-    async def load_filament(self, parameters="L25 T0 Z0"):
-        return await self.handle_filament(parameters, direction=1)
-
-    async def unload_filament(self, parameters="L25 T0 Z0"):
-        return await self.handle_filament(parameters, direction=-1)
-
     async def set_led_color(self, parameters):
         # Use regex to extract key-value pairs like 'R255', 'U0', etc.
         pattern = re.compile(r'([RUBWPI])(\d+)')
