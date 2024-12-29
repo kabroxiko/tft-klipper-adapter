@@ -196,36 +196,45 @@ class WebSocketHandler:
         await websocket.send(subscription_message)
         logging.info("Subscribed to printer object updates.")
 
-    async def call_moonraker_script(self, script):
-        """Send a G-code to Moonraker and wait for the response."""
+    async def call_moonraker_script(self, scripts):
+        """Send a single or multiple G-codes to Moonraker and wait for the responses."""
         try:
-            message_id = 100  # You can implement an incrementing ID for unique requests
-            logging.info(f"Call moonraker script: {script}")
-            gcode_message = json.dumps({
-                "jsonrpc": "2.0",
-                "method": "printer.gcode.script",
-                "params": {"script": script},
-                "id": message_id
-            })
-            # Send the G-code
+            if isinstance(scripts, str):
+                scripts = [scripts]
+            elif isinstance(scripts, list):
+                scripts = scripts
+            else:
+                raise ValueError("Invalid script format. Must be a string or a list of strings.")
+
+            responses = []
             async with connect(self.websocket_url) as websocket:
-                await websocket.send(gcode_message)
+                for script in scripts:
+                    message_id = id(script)  # Generate a unique ID for each request
+                    logging.info(f"Call Moonraker script: {script}")
+                    gcode_message = json.dumps({
+                        "jsonrpc": "2.0",
+                        "method": "printer.gcode.script",
+                        "params": {"script": script},
+                        "id": message_id
+                    })
+                    await websocket.send(gcode_message)
 
-                # Wait for a response with matching ID
-                message = ""
-                while True:
-                    response = json.loads(await websocket.recv())
-                    logging.debug(f"Response: {response}")
+                    # Wait for a response with matching ID
+                    response_message = ""
+                    while True:
+                        response = json.loads(await websocket.recv())
+                        logging.debug(f"Response: {response}")
+                        if response.get("method") == "notify_gcode_response":
+                            response_message += f"{response['params'][0]}\n"
+                        elif response.get("id") == message_id:
+                            response_message += f"{response.get('result', '')}\n"
+                            break
+                    responses.append(response_message.strip())
 
-                    if response.get("method") == "notify_gcode_response":
-                        message += f"{response['params'][0]}\n"
-                    elif response.get("id") == message_id:
-                        message += f"{response.get('result')}\n"
-                        logging.debug(f"Message: {message.strip()}")
-                        return message.strip()
+            return "\n".join(responses)
 
         except Exception as e:
-            logging.error(f"Error sending G-code to Moonraker: {e}")
+            logging.error(f"Error sending G-code(s) to Moonraker: {e}")
             return None
 
     def handle_message(self, message):
