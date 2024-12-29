@@ -11,6 +11,15 @@ from jinja2 import Template
 MACHINE_TYPE = "Artillery Genius Pro"
 
 # Global response formats in Jinja2
+# {Error:{{ error }}
+# echo:{{ message }}
+# //action:{{ action }}
+# {{ command }}
+
+PRINT_STATUS_TEMPLATE = Template(
+    "//action:notification Layer Left {{ (virtual_sdcard.file_position or 0) }}/{{ (virtual_sdcard.file_size or 0) }}"
+)
+
 TEMPERATURE_TEMPLATE = Template(
     "T:{{ extruder.temperature | round(2) }} /{{ extruder.target | round(2) }} "
     "B:{{ heater_bed.temperature | round(2) }} /{{ heater_bed.target | round(2) }} "
@@ -93,6 +102,8 @@ TRACKED_OBJECTS = {
     "mcu": ["mcu_version"],
     "configfile": ["settings"],
     "fan": ["speed"],
+    "virtual_sdcard": None,
+    "print_stats": None,
     "filament_switch_sensor filament_sensor": None
 }
 
@@ -223,6 +234,7 @@ class WebSocketHandler:
             data = json.loads(message)
             if data is not None:
                 if data.get("method") == "notify_status_update":
+                    logging.debug(f"Update: {data.get('params')[0]}")
                     self.update_latest_values(data.get("params")[0])
                 elif data.get("method") == "notify_gcode_response":
                     self.message_queue.put(data["params"][0])
@@ -260,8 +272,9 @@ class TFTAdapter:
         self.serial_handler = serial_handler
         self.websocket_handler = websocket_handler
         self.gcode_queue = Queue()
-        self.auto_report_temperature = None
-        self.auto_report_position = None
+        self.auto_report_temperature = 0
+        self.auto_report_position = 0
+        self.auto_report_print_status = 0
 
     async def serial_reader(self):
         while True:
@@ -278,17 +291,19 @@ class TFTAdapter:
                 logging.info(f"Processing G-code: {gcode}")
                 response = await self.handle_gcode(gcode)
                 if response != "":
+                    logging.info(f"Moonraker response: {response}")
                     self.serial_handler.write(
                         "ok" if f"{response}" == "None" else response
                     )
             await asyncio.sleep(0.1)
 
     async def periodic_update_report(self, auto_report_interval, template):
+        await asyncio.sleep(3)
         while True:
             interval = getattr(self, auto_report_interval, 0)
-            if interval and interval > 0:
+            if interval > 0:
                 self.serial_handler.write(
-                    f"ok {template.render(**self.websocket_handler.latest_values)}"
+                    f"{template.render(**self.websocket_handler.latest_values)}"
                 )
                 await asyncio.sleep(interval)
             else:
@@ -324,9 +339,12 @@ class TFTAdapter:
 
         # Auto-report G-codes
         elif gcode == "M154":  # Enable/disable auto-reporting of position
-            self.auto_report_position = int(parameters[1:]) if parameters else None
+            self.auto_report_position = int(parameters[1:]) if parameters else 0
         elif gcode == "M155":  # Enable/disable auto-reporting of temperature
-            self.auto_report_temperature = int(parameters[1:]) if parameters else None
+            self.auto_report_temperature = int(parameters[1:]) if parameters else 0
+        elif gcode == "M27":  # Enable/disable auto-report print status
+            self.auto_report_print_status = int(parameters[1:]) if parameters else 0
+
         elif gcode == "M33":  # Mock response for SD card operations
             return f"{parameters}\nok"
 
@@ -343,12 +361,24 @@ class TFTAdapter:
         elif gcode == "M150":  # Set LED color
             return await self.set_led_color(parameters)
         elif gcode == "M524":  # Cancel current print
-            return await self.websocket_handler.call_moonraker_script("CANCEL_PRINT")
+            response = (
+                "//action:cancel\n"
+                f"{await self.websocket_handler.call_moonraker_script('CLEAR_PAUSE')}\n"
+                f"{await self.websocket_handler.call_moonraker_script('TURN_OFF_HEATERS')}\n"
+                f"{await self.websocket_handler.call_moonraker_script('M106 S0')}\n"
+                f"{await self.websocket_handler.call_moonraker_script('G92 E0')}\n"
+                f"{await self.websocket_handler.call_moonraker_script('M220 S100')}\n"
+                f"{await self.websocket_handler.call_moonraker_script('M221 S100')}"
+            )
+            return response
         elif gcode in ("M701", "M702"):  # Filament load/unload
             action = "load" if gcode == "M701" else "unload"
             return await self.handle_filament(parameters, action=action)
         elif gcode == "M118":  # Display message
-            return await self.websocket_handler.call_moonraker_script(request)
+            if parameters == "P0 A1 action:cancel":
+                return await self.websocket_handler.call_moonraker_script("CANCEL_PRINT")
+            else:
+                return await self.websocket_handler.call_moonraker_script(request)
 
         # Commands with no action or immediate acknowledgment
         elif gcode in {"M851", "M420", "M22", "M92", "T0"}:  # Acknowledge with "ok"
@@ -360,7 +390,43 @@ class TFTAdapter:
             return "ok"
         elif gcode == "M108":  # Special empty response
             return ""
-        elif gcode in {"M21", "G90", "M82"}:  # Send directly to Moonraker
+        elif gcode == "M24":  # Start/resume SD card print
+            current_layer = 0
+            total_layer = 0 # TODO: falta valor print_stats.info.total_layer
+            extruder_temp = 200
+            bed_temp = 60
+            min_x = 0
+            min_y = 0
+            await self.set_led_color("R0 U255 B0 W255 P255 I255") # ready
+            await self.websocket_handler.call_moonraker_script("CLEAR_PAUSE")
+            progress_supported = 0
+            response = (
+                "//action:print_start\n"
+                f"//action:notification Layer Left {current_layer}/{total_layer}\n"
+            )
+            await self.websocket_handler.call_moonraker_script(f"M117 Heat Nozzle ({extruder_temp}°C) and Bed ({bed_temp}°C)")
+            await self.set_led_color("R255 U255 B0 W255 P255 I255") # heat
+            await self.websocket_handler.call_moonraker_script(f"M190 S{bed_temp}")
+            await self.websocket_handler.call_moonraker_script(f"M104 S{extruder_temp}")
+            await self.set_led_color("R128 U0 B0 W255 P255 I255") # home
+            await self.websocket_handler.call_moonraker_script("M83") # relative extrusion mode
+            await self.websocket_handler.call_moonraker_script("G90") # use absolute coordinates
+            await self.websocket_handler.call_moonraker_script("G92 E0") # reset extruder
+            # TODO: if homed: G28 Z
+            await self.websocket_handler.call_moonraker_script("G28")
+            await self.websocket_handler.call_moonraker_script(f"G0 X{min_x} Y{min_y} Z15 F{50 * 60}")
+            await self.websocket_handler.call_moonraker_script("BED_MESH_PROFILE LOAD=default")
+            await self.set_led_color("R255 U255 B0 W255 P255 I255") # heat
+            await self.websocket_handler.call_moonraker_script(f"M109 S{extruder_temp}")
+            await self.set_led_color("R0 U255 B255 W255 P255 I255") # prime
+
+            return response
+        elif gcode in {"M21", "G90", "M82", "M23", "M25"}:  # Send directly to Moonraker
+            # M21: Initialize the SD card
+            # G90: Set to absolute positioning
+            # M82: Set extruder to absolute mode
+            # M23: Select an SD card file for printing
+            # M25: Pause SD card print
             return await self.websocket_handler.call_moonraker_script(request)
 
         # Fallback for unknown commands
@@ -427,6 +493,9 @@ async def main():
         ),
         tft_adapter.periodic_update_report(
             "auto_report_temperature", TEMPERATURE_TEMPLATE
+        ),
+        tft_adapter.periodic_update_report(
+            "auto_report_print_status", PRINT_STATUS_TEMPLATE
         )
     )
 
