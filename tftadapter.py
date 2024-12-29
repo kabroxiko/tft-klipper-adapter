@@ -299,8 +299,10 @@ class TFTAdapter:
                 gcode = self.gcode_queue.get()
                 logging.info(f"Processing G-code: {gcode}")
                 response = await self.handle_gcode(gcode)
-                if response != "":
-                    logging.info(f"Moonraker response: {response}")
+                if response and response != "":
+                    if response.startswith("!!"):
+                        response = f"{{Error:{response}"
+                    logging.info(f"G-code response: {response}")
                     self.serial_handler.write(
                         "ok" if f"{response}" == "None" else response
                     )
