@@ -463,14 +463,13 @@ class TFTAdapter:
 
     async def set_led_color(self, parameters):
         params = {k: int(v) / 255.0 for k, v in re.findall(r'([RUBWPI])(\d+)', parameters)}
-
         gcode = (
             f"SET_LED LED=statusled "
-            f"RED={params.get('R', 0):.3f} "
-            f"GREEN={params.get('U', 0):.3f} "
-            f"BLUE={params.get('B', 0):.3f} "
-            f"WHITE={params.get('W', 0):.3f} "
-            f"BRIGHTNESS={params.get('P', 0):.3f}"
+            f"RED={params.get('R', 0) * params.get('P', 0):.3f} "
+            f"GREEN={params.get('U', 0) * params.get('P', 0):.3f} "
+            f"BLUE={params.get('B', 0) * params.get('P', 0):.3f} "
+            f"WHITE={params.get('W', 0) * params.get('P', 0):.3f} "
+            "TRANSMIT=1 SYNC=1" # [INDEX=<index>]
         )
 
         return await self.websocket_handler.call_moonraker_script(gcode)
