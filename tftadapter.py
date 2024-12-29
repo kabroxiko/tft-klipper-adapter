@@ -307,13 +307,15 @@ class TFTAdapter:
             await asyncio.sleep(0.1)
 
     async def periodic_update_report(self, auto_report_interval, template):
-        await asyncio.sleep(3)
         while True:
             interval = getattr(self, auto_report_interval, 0)
             if interval > 0:
-                self.serial_handler.write(
-                    f"{template.render(**self.websocket_handler.latest_values)}"
-                )
+                try:
+                    self.serial_handler.write(
+                        f"{template.render(**self.websocket_handler.latest_values)}"
+                    )
+                except:
+                    pass
                 await asyncio.sleep(interval)
             else:
                 await asyncio.sleep(1)
@@ -343,7 +345,7 @@ class TFTAdapter:
                 }
                 return template.render(**state)
             elif gcode == "M20":  # List the files stored on the SD card
-                return GCODE_TEMPLATES[gcode].render(file_list=await self.websocket_handler.query_file_list())
+                return template.render(file_list=await self.websocket_handler.query_file_list())
             return template.render(**self.websocket_handler.latest_values)
 
         # Auto-report G-codes
