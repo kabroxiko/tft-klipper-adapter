@@ -300,12 +300,15 @@ class TFTAdapter:
                 logging.info(f"Processing G-code: {gcode}")
                 response = await self.handle_gcode(gcode)
                 if response and response != "":
-                    if response.startswith("!!"):
-                        response = f"{{Error:{response}"
-                    logging.info(f"G-code response: {response}")
-                    self.serial_handler.write(
-                        "ok" if f"{response}" == "None" else response
-                    )
+                    messages = response.split("\n")
+                    for message in messages:
+                        if message.startswith("!!"):
+                            message = f"{{Error:{message}"
+                        logging.info(f"G-code response: {message}")
+
+                        if message.strip():  # Avoid sending empty lines
+                            self.serial_handler.write(message)
+
             await asyncio.sleep(0.1)
 
     async def periodic_update_report(self, auto_report_interval, template):
