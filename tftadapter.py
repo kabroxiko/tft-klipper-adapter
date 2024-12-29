@@ -346,6 +346,8 @@ class TFTAdapter:
                 return template.render(**state)
             elif gcode == "M20":  # List the files stored on the SD card
                 return template.render(file_list=await self.websocket_handler.query_file_list())
+            elif gcode in ("M220", "M221") and parameters:
+                return await self.websocket_handler.call_moonraker_script(request)
             return template.render(**self.websocket_handler.latest_values)
 
         # Auto-report G-codes
