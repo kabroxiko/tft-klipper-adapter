@@ -23,25 +23,21 @@ PRINT_STATUS_TEMPLATE = Template(
 TEMPERATURE_TEMPLATE = Template(
     "T:{{ extruder.temperature | round(2) }} /{{ extruder.target | round(2) }} "
     "B:{{ heater_bed.temperature | round(2) }} /{{ heater_bed.target | round(2) }} "
-    "@:0 B@:0\n"
-    "ok"
+    "@:0 B@:0"
 )
 
 POSITION_TEMPLATE = Template(
     "X:{{ gcode_move.position[0] | round(2) }} "
     "Y:{{ gcode_move.position[1] | round(2) }} "
     "Z:{{ gcode_move.position[2] | round(2) }} "
-    "E:{{ gcode_move.position[3] | round(2) }}\n"
-    "ok"
+    "E:{{ gcode_move.position[3] | round(2) }}"
 )
 
 FEED_RATE_TEMPLATE = Template(
-    "FR:{{ gcode_move.speed_factor * 100 | int }}%\n"
-    "ok"
+    "FR:{{ gcode_move.speed_factor * 100 | int }}%"
 )
 FLOW_RATE_TEMPLATE = Template(
-    "E0 Flow:{{ gcode_move.extrude_factor * 100 | int }}%\n"
-    "ok"
+    "E0 Flow:{{ gcode_move.extrude_factor * 100 | int }}%"
 )
 
 REPORT_SETTINGS_TEMPLATE = Template(
@@ -52,8 +48,7 @@ REPORT_SETTINGS_TEMPLATE = Template(
     "M206 X{{ gcode_move.homing_origin[0] }} Y{{ gcode_move.homing_origin[1] }} Z{{ gcode_move.homing_origin[2] }}\n"
     "M851 X{{ configfile.settings.bltouch.x_offset }} Y{{ configfile.settings.bltouch.y_offset }} Z{{ configfile.settings.bltouch.z_offset }}\n"
     "M420 S1 Z{{ configfile.settings.bed_mesh.fade_end }}\n"
-    "M106 S{{ fan.speed }}\n"
-    "ok"
+    "M106 S{{ fan.speed }}"
 )
 
 FIRMWARE_INFO_TEMPLATE = Template(
@@ -78,20 +73,17 @@ FIRMWARE_INFO_TEMPLATE = Template(
     "Cap:LONG_FILENAME:1\n"
     "Cap:BABYSTEPPING:1\n"
     "Cap:BUILD_PERCENT:1\n"
-    "Cap:CHAMBER_TEMPERATURE:0\n"
-    "ok"
+    "Cap:CHAMBER_TEMPERATURE:0"
 )
 
 SOFTWARE_ENDSTOPS_TEMPLATE = Template(
-    "Soft endstops: {{ state }}\n"
-    "ok"
+    "Soft endstops: {{ state }}"
 )
 
 FILE_LIST_TEMPLATE = Template(
     "Begin file list\n"
     "{% for path, details in file_list.items() %}{{ path }} {{ details.size }}\n{% endfor %}"
-    "End file list\n"
-    "ok"
+    "End file list"
 )
 
 TRACKED_OBJECTS = {
@@ -317,7 +309,7 @@ class TFTAdapter:
             if interval > 0:
                 try:
                     self.serial_handler.write(
-                        f"{template.render(**self.websocket_handler.latest_values)}"
+                        f"ok {template.render(**self.websocket_handler.latest_values)}"
                     )
                 except:
                     pass
@@ -348,12 +340,12 @@ class TFTAdapter:
                 state = {
                     "state": "On" if self.websocket_handler.latest_values["filament_switch_sensor filament_sensor"]["enabled"] else "Off"
                 }
-                return template.render(**state)
+                return f"{template.render(**state)}\nok"
             elif gcode == "M20":  # List the files stored on the SD card
-                return template.render(file_list=await self.websocket_handler.query_file_list())
+                return f"{template.render(file_list=await self.websocket_handler.query_file_list())}\nok"
             elif gcode in ("M220", "M221") and parameters:
                 return await self.websocket_handler.call_moonraker_script(request)
-            return template.render(**self.websocket_handler.latest_values)
+            return f"{template.render(**self.websocket_handler.latest_values)}\nok"
 
         # Auto-report G-codes
         elif gcode == "M154":  # Enable/disable auto-reporting of position
