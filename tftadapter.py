@@ -370,6 +370,9 @@ class TFTAdapter:
             return await self.websocket_handler.call_moonraker_script(
                 ["BED_MESH_CLEAR", f"BED_MESH_CALIBRATE {parameters if parameters else ''}"]
             )
+        elif gcode == "M112":  # Bed Leveling (Unified)
+            await self.websocket_handler.call_moonraker_script("M112")
+            return f"{{Error:Emergency Stop"
 
         # Special G-codes with parameter-specific behavior
         elif gcode in ("M201", "M203", "M206"):
