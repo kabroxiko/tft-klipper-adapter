@@ -266,6 +266,25 @@ class WebSocketHandler:
         except Exception as e:
             logging.error(f"Error querying file list: {e}")
 
+    async def start_print(self, filename):
+        """Query the list of files from Moonraker."""
+        try:
+            query = json.dumps({
+                "jsonrpc": "2.0",
+                "method": "printer.print.start",
+                "params": {"filename": filename},
+                "id": 2
+            })
+            async with connect(self.websocket_url) as websocket:
+                await websocket.send(query)
+                while True:
+                    response = json.loads(await websocket.recv())
+                    if response.get("id") == 2:
+                        result = response.get("result", [])
+                        return result
+        except Exception as e:
+            logging.error(f"Error when printing file: {e}")
+
     def update_latest_values(self, updates):
         logging.debug(f"Update latest_values: {updates}")
         for key, values in updates.items():
@@ -281,6 +300,7 @@ class TFTAdapter:
         self.auto_report_temperature = 0
         self.auto_report_position = 0
         self.auto_report_print_status = 0
+        self.selected_file = 0
 
     async def serial_reader(self):
         while True:
@@ -365,7 +385,7 @@ class TFTAdapter:
             self.auto_report_print_status = params_dict.get("S", 0)
 
         elif gcode == "M33":  # Mock response for SD card operations
-            return f"{request.split(maxsplit=1)[1]}\nok"
+            return f"{parameters}\nok"
 
         elif gcode == "G29":  # Bed Leveling (Unified)
             return await self.websocket_handler.call_moonraker_script(
@@ -444,36 +464,12 @@ class TFTAdapter:
 
         elif gcode == "M108":  # Special empty response
             return ""
-        elif gcode == "M24":  # Start/resume SD card print
-            current_layer = 0
-            total_layer = 0 # TODO: falta valor print_stats.info.total_layer
-            extruder_temp = 200
-            bed_temp = 60
-            min_x = 0
-            min_y = 0
-            await self.set_led_color("R0 U255 B0 W255 P255 I255") # ready
-            await self.websocket_handler.call_moonraker_script("CLEAR_PAUSE")
-            progress_supported = 0
-            response = (
-                "//action:print_start\n"
-                f"//action:notification Layer Left {current_layer}/{total_layer}\n"
-            )
-            await self.websocket_handler.call_moonraker_script(f"M117 Heat Nozzle ({extruder_temp}°C) and Bed ({bed_temp}°C)")
-            await self.set_led_color("R255 U255 B0 W255 P255 I255") # heat
-            await self.websocket_handler.call_moonraker_script(f"M190 S{bed_temp}")
-            await self.websocket_handler.call_moonraker_script(f"M104 S{extruder_temp}")
-            await self.set_led_color("R128 U0 B0 W255 P255 I255") # home
-            await self.websocket_handler.call_moonraker_script("M83") # relative extrusion mode
-            await self.websocket_handler.call_moonraker_script("G90") # use absolute coordinates
-            await self.websocket_handler.call_moonraker_script("G92 E0") # reset extruder
-            # TODO: if homed: G28 Z
-            await self.websocket_handler.call_moonraker_script("G28")
-            await self.websocket_handler.call_moonraker_script(f"G0 X{min_x} Y{min_y} Z15 F{50 * 60}")
-            await self.websocket_handler.call_moonraker_script("BED_MESH_PROFILE LOAD=default")
-            await self.set_led_color("R255 U255 B0 W255 P255 I255") # heat
-            await self.websocket_handler.call_moonraker_script(f"M109 S{extruder_temp}")
-            await self.set_led_color("R0 U255 B255 W255 P255 I255") # prime
-
+        elif gcode == "M23":   # Select an SD card file for printing
+            self.selected_file = parameters
+            return await self.websocket_handler.call_moonraker_script(request)
+        elif gcode == "M24":   # Start/resume SD card print
+            print(self.selected_file)
+            return await self.websocket_handler.start_print(self.selected_file)
         elif gcode in {"M82"}:  # Set extruder to absolute mode
             await self.websocket_handler.call_moonraker_script(request)
             return "ok"
@@ -484,10 +480,9 @@ class TFTAdapter:
             # M92: Set axis steps per unit
             # T0: Select tool 0
             return "ok"
-        elif gcode in {"G28", "G0", "G1", "M420", "M21", "M84", "G90", "G91", "M82", "M23", "M24", "M25", "M118", "M106", "M104", "M140", "M48"}:  # Send directly to Moonraker
+        elif gcode in {"G28", "G0", "G1", "M420", "M21", "M84", "G90", "G91", "M82", "M25", "M106", "M104", "M140", "M48"}:  # Send directly to Moonraker
             # M21: Initialize the SD card
             # G90: Set to absolute positioning
-            # M23: Select an SD card file for printing
             # M25: Pause SD card print
             return await self.websocket_handler.call_moonraker_script(request)
 
@@ -547,7 +542,7 @@ async def main():
             "auto_report_position", POSITION_TEMPLATE
         ),
         tft_adapter.periodic_update_report(
-            "auto_report_temperature", TEMPERATURE_TEMPLATE
+            "auto_report_temperature", TEMPERATURE_TEMPLATE, prefix_ok=True
         ),
         tft_adapter.periodic_update_report(
             "auto_report_print_status", PRINT_STATUS_TEMPLATE
