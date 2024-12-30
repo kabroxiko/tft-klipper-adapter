@@ -6,6 +6,7 @@ from queue import Queue
 from websockets import connect
 import serial
 import re
+import os
 from jinja2 import Template
 
 MACHINE_TYPE = "Artillery Genius Pro"
@@ -266,49 +267,40 @@ class WebSocketHandler:
         except Exception as e:
             logging.error(f"Error querying file list: {e}")
 
-    async def start_print(self, filename):
-        """Query the list of files from Moonraker."""
-        try:
-            query = json.dumps({
-                "jsonrpc": "2.0",
-                "method": "printer.print.start",
-                "params": {"filename": filename},
-                "id": 2
-            })
-            async with connect(self.websocket_url) as websocket:
-                await websocket.send(query)
-                while True:
-                    response = json.loads(await websocket.recv())
-                    if response.get("id") == 2:
-                        result = response.get("result", [])
-                        return result
-        except Exception as e:
-            logging.error(f"Error when printing file: {e}")
-
-    async def cancel_print(self):
-        """Query the list of files from Moonraker."""
-        try:
-            query = json.dumps({
-                "jsonrpc": "2.0",
-                "method": "printer.print.cancel",
-                "id": 2
-            })
-            async with connect(self.websocket_url) as websocket:
-                await websocket.send(query)
-                while True:
-                    response = json.loads(await websocket.recv())
-                    if response.get("id") == 2:
-                        result = response.get("result", [])
-                        return result
-        except Exception as e:
-            logging.error(f"Error when canceling print: {e}")
-
     def update_latest_values(self, updates):
         logging.debug(f"Update latest_values: {updates}")
         for key, values in updates.items():
             if key in self.latest_values:
                 self.latest_values[key].update(values)
 
+    async def send_jsonrpc(self, method, params=None, request_id=None):
+        """Send a JSON-RPC request and return the response."""
+        try:
+            async with connect(self.websocket_url) as websocket:
+                request_id = request_id or int.from_bytes(os.urandom(2), "big")  # Generate a unique ID
+                request = {
+                    "jsonrpc": "2.0",
+                    "method": method,
+                    "params": params or {},
+                    "id": request_id,
+                }
+                await websocket.send(json.dumps(request))
+
+                while True:
+                    response = json.loads(await websocket.recv())
+                    if response.get("id") == request_id:
+                        return response.get("result", {})
+        except Exception as e:
+            logging.error(f"JSON-RPC call error: {method}, {e}")
+            return None
+
+    async def start_print(self, filename):
+        """Start a print."""
+        return await self.send_jsonrpc("printer.print.start", {"filename": filename})
+
+    async def cancel_print(self):
+        """Cancel the current print."""
+        return await self.send_jsonrpc("printer.print.cancel")
 
 class TFTAdapter:
     def __init__(self, serial_handler, websocket_handler):
@@ -379,6 +371,11 @@ class TFTAdapter:
             "M211": SOFTWARE_ENDSTOPS_TEMPLATE, # Enable/disable software endstops
             "M20":  FILE_LIST_TEMPLATE,         # List files on the SD card
         }
+        gcode_handlers = {
+            "M24":  lambda _: self.websocket_handler.start_print(self.selected_file),
+            "M524": lambda _: self.websocket_handler.cancel_print()
+        }
+        handler = gcode_handlers.get(gcode, None)
 
         # Direct handlers
         if gcode in GCODE_TEMPLATES:
@@ -393,6 +390,9 @@ class TFTAdapter:
             elif gcode in ("M220", "M221") and params_dict:
                 return await self.websocket_handler.call_moonraker_script(request)
             return f"{template.render(**self.websocket_handler.latest_values)}\nok"
+
+        elif handler:
+            return await handler(parameters)
 
         # Auto-report G-codes
         elif gcode == "M154":  # Enable/disable auto-reporting of position
@@ -486,7 +486,7 @@ class TFTAdapter:
             # M92: Set axis steps per unit
             # T0: Select tool 0
             return "ok"
-        elif gcode in {"G28", "G0", "G1", "M420", "M21", "M84", "G90", "G91", "M82", "M25", "M106", "M104", "M140", "M48"}:  # Send directly to Moonraker
+        elif gcode in {"G28", "G0", "G1", "M420", "M21", "M84", "G90", "G91", "M25", "M106", "M104", "M140", "M48"}:  # Send directly to Moonraker
             # M21: Initialize the SD card
             # G90: Set to absolute positioning
             # M25: Pause SD card print
