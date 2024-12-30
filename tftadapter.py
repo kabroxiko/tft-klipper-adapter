@@ -410,8 +410,9 @@ class TFTAdapter:
             }
             return await self.handle_filament(params_dict)
         elif gcode == "M118":  # Display message
+            # TODO: Complete rest of options
             if request == "M118 P0 A1 action:cancel":
-                return await self.websocket_handler.call_moonraker_script("CANCEL_PRINT")
+                return "//action:cancel"
             else:
                 return await self.websocket_handler.call_moonraker_script(request)
 
