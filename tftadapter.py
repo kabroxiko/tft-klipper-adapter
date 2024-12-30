@@ -234,7 +234,7 @@ class WebSocketHandler:
             if key in self.latest_values:
                 self.latest_values[key].update(values)
 
-    async def send_jsonrpc(self, method, params=None, request_id=None):
+    async def send_moonraker_request(self, method, params=None, request_id=None):
         """Send a JSON-RPC request and return the response."""
         try:
             async with connect(self.websocket_url) as websocket:
@@ -257,22 +257,22 @@ class WebSocketHandler:
 
     async def initialize_values(self, websocket):
         """Initialize the latest values and file list from the printer."""
-        result = await self.send_jsonrpc("printer.objects.query", {"objects": TRACKED_OBJECTS})
+        result = await self.send_moonraker_request("printer.objects.query", {"objects": TRACKED_OBJECTS})
         logging.info(f"result: {result}")
         self.latest_values = result.get("status")
         logging.info("Initialized latest values from printer.")
 
     async def query_file_list(self):
         """Get the list of files."""
-        return await self.send_jsonrpc("server.files.list", {"path": ""})
+        return await self.send_moonraker_request("server.files.list", {"path": ""})
 
     async def start_print(self, filename):
         """Start a print."""
-        return await self.send_jsonrpc("printer.print.start", {"filename": filename})
+        return await self.send_moonraker_request("printer.print.start", {"filename": filename})
 
     async def cancel_print(self):
         """Cancel the current print."""
-        return await self.send_jsonrpc("printer.print.cancel")
+        return await self.send_moonraker_request("printer.print.cancel")
 
 class TFTAdapter:
     def __init__(self, serial_handler, websocket_handler):
