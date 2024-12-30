@@ -80,6 +80,10 @@ SOFTWARE_ENDSTOPS_TEMPLATE = Template(
     "Soft endstops: {{ state }}"
 )
 
+PROBE_TEST_TEMPLATE = Template(
+    "echo:Last query: {{ probe.last_query }} Last Z result: {{ probe.last_z_result }}"
+)
+
 FILE_LIST_TEMPLATE = Template(
     "Begin file list\n"
     "{% for path, details in file_list.items() %}{{ path }} {{ details.size }}\n{% endfor %}"
@@ -95,6 +99,7 @@ TRACKED_OBJECTS = {
     "configfile": ["settings"],
     "fan": ["speed"],
     "virtual_sdcard": ["file_position", "file_size"],
+    "probe": ["last_query", "last_z_result"],
     "print_stats": None,
     "filament_switch_sensor filament_sensor": None
 }
@@ -406,6 +411,33 @@ class TFTAdapter:
             # M92: Set axis steps per unit
             # T0: Select tool 0
             return "ok"
+
+        elif gcode == "M280":  # Servo Position
+            param_dict = {key.upper(): value for key, value in re.findall(r'([A-Z])(\d+)', parameters)}
+
+            servo_id = int(param_dict.get('P', 0))  # Default to 0 if 'P' is missing
+            position = int(param_dict.get('S', 0))  # Default to 0 if 'S' is missing
+            bltouch = True # TODO: if configfile.settings.bltouch
+            # TODO: // Unknown command:"M48"
+
+            if position == 120: # Test
+                await self.websocket_handler.call_moonraker_script("QUERY_PROBE")
+                return f"{PROBE_TEST_TEMPLATE.render(**self.websocket_handler.latest_values)}\nok"
+            else:
+                if bltouch:
+                    if position == 10: # Deploy
+                        command = "BLTOUCH_DEBUG COMMAND=pin_down"
+                    elif position == 90: # Stow
+                        command = "BLTOUCH_DEBUG COMMAND=pin_up"
+                    elif position == 160:  # Reset
+                        command = "BLTOUCH_DEBUG COMMAND=reset"
+                else:
+                    if position == 10: # Deploy
+                        command = "SET_PIN PIN=_probe_enable VALUE=1"
+                    if position in (90, 160):
+                        command = "SET_PIN PIN=_probe_enable VALUE=0"
+            return await self.websocket_handler.call_moonraker_script(command)
+
         elif gcode == "M108":  # Special empty response
             return ""
         elif gcode == "M24":  # Start/resume SD card print
@@ -441,7 +473,7 @@ class TFTAdapter:
         elif gcode in {"M82"}:  # Set extruder to absolute mode
             await self.websocket_handler.call_moonraker_script(request)
             return "ok"
-        elif gcode in {"G28", "G0", "G1", "M420", "M21", "M84", "G90", "G91", "M82", "M23", "M24", "M25", "M118", "M106", "M104", "M140", "M280", "M48"}:  # Send directly to Moonraker
+        elif gcode in {"G28", "G0", "G1", "M420", "M21", "M84", "G90", "G91", "M82", "M23", "M24", "M25", "M118", "M106", "M104", "M140", "M48"}:  # Send directly to Moonraker
             # M21: Initialize the SD card
             # G90: Set to absolute positioning
             # M23: Select an SD card file for printing
