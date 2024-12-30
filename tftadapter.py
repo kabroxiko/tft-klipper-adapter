@@ -308,14 +308,15 @@ class TFTAdapter:
 
             await asyncio.sleep(0.1)
 
-    async def periodic_update_report(self, auto_report_interval, template):
+    async def periodic_update_report(self, auto_report_interval, template, prefix_ok=False):
         while True:
             interval = getattr(self, auto_report_interval, 0)
             if interval > 0:
                 try:
-                    self.serial_handler.write(
-                        f"ok {template.render(**self.websocket_handler.latest_values)}"
-                    )
+                    report = template.render(**self.websocket_handler.latest_values)
+                    if prefix_ok:
+                        report = f"ok {report}"
+                    self.serial_handler.write(report)
                 except:
                     pass
                 await asyncio.sleep(interval)
