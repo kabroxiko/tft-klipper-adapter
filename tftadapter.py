@@ -391,16 +391,18 @@ class TFTAdapter:
         elif gcode == "M150":  # Set LED color
             return await self.set_led_color(params_dict)
         elif gcode == "M524":  # Cancel current print
-            response = (
-                "//action:cancel\n"
-                f"{await self.websocket_handler.call_moonraker_script('CLEAR_PAUSE')}\n"
-                f"{await self.websocket_handler.call_moonraker_script('TURN_OFF_HEATERS')}\n"
-                f"{await self.websocket_handler.call_moonraker_script('M106 S0')}\n"
-                f"{await self.websocket_handler.call_moonraker_script('G92 E0')}\n"
-                f"{await self.websocket_handler.call_moonraker_script('M220 S100')}\n"
-                f"{await self.websocket_handler.call_moonraker_script('M221 S100')}"
-            )
-            return response
+            return await self.websocket_handler.call_moonraker_script('CANCEL_PRINT')
+        # elif gcode == "M524":  # Cancel current print
+        #     response = (
+        #         "//action:cancel\n"
+        #         f"{await self.websocket_handler.call_moonraker_script('CLEAR_PAUSE')}\n"
+        #         f"{await self.websocket_handler.call_moonraker_script('TURN_OFF_HEATERS')}\n"
+        #         f"{await self.websocket_handler.call_moonraker_script('M106 S0')}\n"
+        #         f"{await self.websocket_handler.call_moonraker_script('G92 E0')}\n"
+        #         f"{await self.websocket_handler.call_moonraker_script('M220 S100')}\n"
+        #         f"{await self.websocket_handler.call_moonraker_script('M221 S100')}"
+        #     )
+        #     return response
         elif gcode in ("M701", "M702"):  # Filament load/unload
             length = 25
             params_dict = {
