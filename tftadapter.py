@@ -248,25 +248,6 @@ class WebSocketHandler:
         except Exception as e:
             logging.error(f"Error processing WebSocket message: {e}")
 
-    async def query_file_list(self):
-        """Query the list of files from Moonraker."""
-        try:
-            file_query_message = json.dumps({
-                "jsonrpc": "2.0",
-                "method": "server.files.list",
-                "params": {"path": ""},  # Root directory or adjust as needed
-                "id": 2
-            })
-            async with connect(self.websocket_url) as websocket:
-                await websocket.send(file_query_message)
-                while True:
-                    response = json.loads(await websocket.recv())
-                    if response.get("id") == 2:
-                        result = response.get("result", [])
-                        return {file["path"]: {"size": file["size"]} for file in result}
-        except Exception as e:
-            logging.error(f"Error querying file list: {e}")
-
     def update_latest_values(self, updates):
         logging.debug(f"Update latest_values: {updates}")
         for key, values in updates.items():
@@ -293,6 +274,10 @@ class WebSocketHandler:
         except Exception as e:
             logging.error(f"JSON-RPC call error: {method}, {e}")
             return None
+
+    async def query_file_list(self):
+        """Get the list of files."""
+        return await self.send_jsonrpc("server.files.list", {"path": ""})
 
     async def start_print(self, filename):
         """Start a print."""
@@ -386,7 +371,9 @@ class TFTAdapter:
                 }
                 return f"{template.render(**state)}\nok"
             elif gcode == "M20":  # List the files stored on the SD card
-                return f"{template.render(file_list=await self.websocket_handler.query_file_list())}\nok"
+                result = await self.websocket_handler.query_file_list()
+                file_list = {file["path"]: {"size": file["size"]} for file in result}
+                return f"{template.render(file_list=file_list)}\nok"
             elif gcode in ("M220", "M221") and params_dict:
                 return await self.websocket_handler.call_moonraker_script(request)
             return f"{template.render(**self.websocket_handler.latest_values)}\nok"
