@@ -325,6 +325,9 @@ class TFTAdapter:
     async def handle_gcode(self, request):
         gcode, *parameters = request.split(maxsplit=1)
         parameters = parameters[0] if parameters else None
+        params_dict = {
+            key: int(value) for key, value in re.findall(r"([A-Z])(\d+)", parameters)
+        } if parameters else {}
 
         # Predefined G-code handlers
         GCODE_TEMPLATES = {
@@ -348,24 +351,24 @@ class TFTAdapter:
                 return f"{template.render(**state)}\nok"
             elif gcode == "M20":  # List the files stored on the SD card
                 return f"{template.render(file_list=await self.websocket_handler.query_file_list())}\nok"
-            elif gcode in ("M220", "M221") and parameters:
+            elif gcode in ("M220", "M221") and params_dict:
                 return await self.websocket_handler.call_moonraker_script(request)
             return f"{template.render(**self.websocket_handler.latest_values)}\nok"
 
         # Auto-report G-codes
         elif gcode == "M154":  # Enable/disable auto-reporting of position
-            self.auto_report_position = int(parameters[1:]) if parameters else 0
+            self.auto_report_position = params_dict.get("S", 0)
         elif gcode == "M155":  # Enable/disable auto-reporting of temperature
-            self.auto_report_temperature = int(parameters[1:]) if parameters else 0
+            self.auto_report_temperature = params_dict.get("S", 0)
         elif gcode == "M27":  # Enable/disable auto-report print status
-            self.auto_report_print_status = int(parameters[1:]) if parameters else 0
+            self.auto_report_print_status = params_dict.get("S", 0)
 
         elif gcode == "M33":  # Mock response for SD card operations
-            return f"{parameters}\nok"
+            return f"{request.split(maxsplit=1)[1]}\nok"
 
         elif gcode == "G29":  # Bed Leveling (Unified)
             return await self.websocket_handler.call_moonraker_script(
-                ["BED_MESH_CLEAR", f"BED_MESH_CALIBRATE {parameters if parameters else ''}"]
+                ["BED_MESH_CLEAR", f"BED_MESH_CALIBRATE {params_dict if params_dict else ''}"]
             )
         elif gcode == "M112":  # Bed Leveling (Unified)
             await self.websocket_handler.call_moonraker_script("M112")
@@ -373,16 +376,19 @@ class TFTAdapter:
 
         # Special G-codes with parameter-specific behavior
         elif gcode in ("M201", "M203", "M206"):
-            if gcode == "M201" and parameters.startswith(("X", "Y")):  # Set maximum acceleration
-                command = f"SET_VELOCITY_LIMIT ACCEL={parameters[1:]} ACCEL_TO_DECEL={int(parameters[1:]) / 2}"
-            elif gcode == "M203" and parameters.startswith(("X", "Y")):  # Set maximum feedrate
-                command = f"SET_VELOCITY_LIMIT VELOCITY={parameters[1:]}"
-            elif gcode == "M206" and parameters.startswith("X", "Y", "Z", "E"):  # Set home offset
-                command = f"SET_GCODE_OFFSET {parameters[:1]}={parameters[1:]}"
+            if gcode == "M201" and any(key in params_dict for key in ("X", "Y")):  # Set maximum acceleration
+                acceleration = int(params_dict.get('X', params_dict.get('Y', 0)))
+                command = f"SET_VELOCITY_LIMIT ACCEL={acceleration} ACCEL_TO_DECEL={acceleration / 2}"
+            elif gcode == "M203" and any(key in params_dict for key in ("X", "Y")):  # Set maximum feedrate
+                velocity = int(params_dict.get('X', params_dict.get('Y', 0)))
+                command = f"SET_VELOCITY_LIMIT VELOCITY={velocity}"
+            elif gcode == "M206" and any(key in params_dict for key in ("X", "Y", "Z", "E")):  # Set home offset
+                offsets = " ".join(f"{axis}={value}" for axis, value in params_dict.items() if axis in ("X", "Y", "Z", "E"))
+                command = f"SET_GCODE_OFFSET {offsets}"
             return await self.websocket_handler.call_moonraker_script(command)
 
         elif gcode == "M150":  # Set LED color
-            return await self.set_led_color(parameters)
+            return await self.set_led_color(params_dict)
         elif gcode == "M524":  # Cancel current print
             response = (
                 "//action:cancel\n"
@@ -395,10 +401,15 @@ class TFTAdapter:
             )
             return response
         elif gcode in ("M701", "M702"):  # Filament load/unload
-            action = "load" if gcode == "M701" else "unload"
-            return await self.handle_filament(parameters, action=action)
+            length = 25
+            params_dict = {
+                'L': length if gcode == "M701" else -1 * length,
+                'T': params_dict.get("T", 0),
+                'Z': params_dict.get("Z", 0)
+            }
+            return await self.handle_filament(params_dict)
         elif gcode == "M118":  # Display message
-            if parameters == "P0 A1 action:cancel":
+            if request == "M118 P0 A1 action:cancel":
                 return await self.websocket_handler.call_moonraker_script("CANCEL_PRINT")
             else:
                 return await self.websocket_handler.call_moonraker_script(request)
@@ -413,10 +424,8 @@ class TFTAdapter:
             return "ok"
 
         elif gcode == "M280":  # Servo Position
-            param_dict = {key.upper(): value for key, value in re.findall(r'([A-Z])(\d+)', parameters)}
-
-            servo_id = int(param_dict.get('P', 0))  # Default to 0 if 'P' is missing
-            position = int(param_dict.get('S', 0))  # Default to 0 if 'S' is missing
+            servo_id = int(params_dict.get('P', 0))  # Default to 0 if 'P' is missing
+            position = int(params_dict.get('S', 0))  # Default to 0 if 'S' is missing
             bltouch = True # TODO: if configfile.settings.bltouch
             # TODO: // Unknown command:"M48"
 
@@ -485,33 +494,27 @@ class TFTAdapter:
             logging.warning(f"Unknown gcode: {request}")
             return None
 
-    async def handle_filament(self, parameters="L25 T0 Z0", action="load"):
-        pattern = re.compile(r'([LTZ])(\d+)')
-        params = {match[0]: int(match[1]) for match in pattern.findall(parameters)}
-
-        length = params.get("L", 25)
-        extruder = params.get("T", 0)
-        zmove = params.get("Z", 0)
-        direction = 1 if action == "load" else -1
-        command = (
-            "G91\n"               # Relative Positioning
-            f"G92 E{extruder}\n"  # Reset Extruder
-            f"G1 Z{zmove} E{direction * length} F{3*60}\n"  # Extrude or Retract
-            "G92 E0\n"            # Reset Extruder
-        )
+    async def handle_filament(self, params_dict):
+        length = params_dict.get("L")
+        extruder = params_dict.get("T")
+        zmove = params_dict.get("Z")
+        command = [
+            "G91",               # Relative Positioning
+            f"G92 E{extruder}",  # Reset Extruder
+            f"G1 Z{zmove} E{length} F{3*60}",  # Extrude or Retract
+            "G92 E0"              # Reset Extruder
+        ]
         return await self.websocket_handler.call_moonraker_script(command)
 
-    async def set_led_color(self, parameters):
-        params = {k: int(v) / 255.0 for k, v in re.findall(r'([RUBWPI])(\d+)', parameters)}
+    async def set_led_color(self, params_dict):
         gcode = (
             f"SET_LED LED=statusled "
-            f"RED={params.get('R', 0) * params.get('P', 0):.3f} "
-            f"GREEN={params.get('U', 0) * params.get('P', 0):.3f} "
-            f"BLUE={params.get('B', 0) * params.get('P', 0):.3f} "
-            f"WHITE={params.get('W', 0) * params.get('P', 0):.3f} "
+            f"RED={(int(params_dict.get('R', 0)) / 255 ) * (int(params_dict.get('P', 0)) / 255 ):.3f} "
+            f"GREEN={(int(params_dict.get('U', 0)) / 255 ) * (int(params_dict.get('P', 0)) / 255 ):.3f} "
+            f"BLUE={(int(params_dict.get('B', 0)) / 255 ) * (int(params_dict.get('P', 0)) / 255 ):.3f} "
+            f"WHITE={(int(params_dict.get('W', 0)) / 255 ) * (int(params_dict.get('P', 0)) / 255 ):.3f} "
             "TRANSMIT=1 SYNC=1" # [P=<index>]
         )
-
         return await self.websocket_handler.call_moonraker_script(gcode)
 
 async def main():
