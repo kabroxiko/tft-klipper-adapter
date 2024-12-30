@@ -285,6 +285,24 @@ class WebSocketHandler:
         except Exception as e:
             logging.error(f"Error when printing file: {e}")
 
+    async def cancel_print(self):
+        """Query the list of files from Moonraker."""
+        try:
+            query = json.dumps({
+                "jsonrpc": "2.0",
+                "method": "printer.print.cancel",
+                "id": 2
+            })
+            async with connect(self.websocket_url) as websocket:
+                await websocket.send(query)
+                while True:
+                    response = json.loads(await websocket.recv())
+                    if response.get("id") == 2:
+                        result = response.get("result", [])
+                        return result
+        except Exception as e:
+            logging.error(f"Error when canceling print: {e}")
+
     def update_latest_values(self, updates):
         logging.debug(f"Update latest_values: {updates}")
         for key, values in updates.items():
@@ -410,19 +428,6 @@ class TFTAdapter:
 
         elif gcode == "M150":  # Set LED color
             return await self.set_led_color(params_dict)
-        elif gcode == "M524":  # Cancel current print
-            return await self.websocket_handler.call_moonraker_script('CANCEL_PRINT')
-        # elif gcode == "M524":  # Cancel current print
-        #     response = (
-        #         "//action:cancel\n"
-        #         f"{await self.websocket_handler.call_moonraker_script('CLEAR_PAUSE')}\n"
-        #         f"{await self.websocket_handler.call_moonraker_script('TURN_OFF_HEATERS')}\n"
-        #         f"{await self.websocket_handler.call_moonraker_script('M106 S0')}\n"
-        #         f"{await self.websocket_handler.call_moonraker_script('G92 E0')}\n"
-        #         f"{await self.websocket_handler.call_moonraker_script('M220 S100')}\n"
-        #         f"{await self.websocket_handler.call_moonraker_script('M221 S100')}"
-        #     )
-        #     return response
         elif gcode in ("M701", "M702"):  # Filament load/unload
             length = 25
             params_dict = {
@@ -469,6 +474,8 @@ class TFTAdapter:
             return await self.websocket_handler.call_moonraker_script(request)
         elif gcode == "M24":   # Start/resume SD card print
             return await self.websocket_handler.start_print(self.selected_file)
+        elif gcode == "M524":  # Cancel current print
+            return await self.websocket_handler.cancel_print()
         elif gcode in {"M82"}:  # Set extruder to absolute mode
             await self.websocket_handler.call_moonraker_script(request)
             return "ok"
