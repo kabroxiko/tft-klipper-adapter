@@ -94,7 +94,7 @@ TRACKED_OBJECTS = {
     "mcu": ["mcu_version"],
     "configfile": ["settings"],
     "fan": ["speed"],
-    "virtual_sdcard": None,
+    "virtual_sdcard": ["file_position", "file_size"],
     "print_stats": None,
     "filament_switch_sensor filament_sensor": None
 }
