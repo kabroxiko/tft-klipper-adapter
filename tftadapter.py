@@ -468,7 +468,6 @@ class TFTAdapter:
             self.selected_file = parameters
             return await self.websocket_handler.call_moonraker_script(request)
         elif gcode == "M24":   # Start/resume SD card print
-            print(self.selected_file)
             return await self.websocket_handler.start_print(self.selected_file)
         elif gcode in {"M82"}:  # Set extruder to absolute mode
             await self.websocket_handler.call_moonraker_script(request)
