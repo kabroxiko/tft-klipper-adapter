@@ -414,15 +414,6 @@ class TFTAdapter:
             else:
                 return await self.websocket_handler.call_moonraker_script(request)
 
-        # Commands with no action or immediate acknowledgment
-        elif gcode in {"M851", "M420", "M22", "M92", "T0"}:  # Acknowledge with "ok"
-            # M851: Probe Z-offset
-            # M420: Enable/Disable bed leveling
-            # M22: Release the SD card
-            # M92: Set axis steps per unit
-            # T0: Select tool 0
-            return "ok"
-
         elif gcode == "M280":  # Servo Position
             servo_id = int(params_dict.get('P', 0))  # Default to 0 if 'P' is missing
             position = int(params_dict.get('S', 0))  # Default to 0 if 'S' is missing
@@ -481,6 +472,13 @@ class TFTAdapter:
 
         elif gcode in {"M82"}:  # Set extruder to absolute mode
             await self.websocket_handler.call_moonraker_script(request)
+            return "ok"
+
+        # Commands with no action or immediate acknowledgment
+        elif gcode in {"M22", "M92", "T0"}:  # Acknowledge with "ok"
+            # M22: Release the SD card
+            # M92: Set axis steps per unit
+            # T0: Select tool 0
             return "ok"
         elif gcode in {"G28", "G0", "G1", "M420", "M21", "M84", "G90", "G91", "M82", "M23", "M24", "M25", "M118", "M106", "M104", "M140", "M48"}:  # Send directly to Moonraker
             # M21: Initialize the SD card
