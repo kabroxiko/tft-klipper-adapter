@@ -477,7 +477,7 @@ class TFTAdapter:
             f"GREEN={params.get('U', 0) * params.get('P', 0):.3f} "
             f"BLUE={params.get('B', 0) * params.get('P', 0):.3f} "
             f"WHITE={params.get('W', 0) * params.get('P', 0):.3f} "
-            "TRANSMIT=1 SYNC=1" # [INDEX=<index>]
+            "TRANSMIT=1 SYNC=1" # [P=<index>]
         )
 
         return await self.websocket_handler.call_moonraker_script(gcode)
