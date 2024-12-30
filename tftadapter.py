@@ -163,26 +163,6 @@ class WebSocketHandler:
             logging.error(f"Error in WebSocket listener: {e}")
             raise  # Trigger reconnection
 
-    async def initialize_values(self, websocket):
-        """Initialize the latest values and file list from the printer."""
-        # Query printer objects
-        query_message = json.dumps({
-            "jsonrpc": "2.0",
-            "method": "printer.objects.query",
-            "params": {
-                "objects": TRACKED_OBJECTS
-            },
-            "id": 1
-        })
-        await websocket.send(query_message)
-        result = None
-        while result is None:
-            response = await websocket.recv()
-            result = json.loads(response).get("result")
-        logging.info(f"result: {result}")
-        self.latest_values = result.get("status")
-        logging.info("Initialized latest values from printer.")
-
     async def subscribe_to_printer_objects(self, websocket):
         subscription_message = json.dumps({
             "jsonrpc": "2.0",
@@ -274,6 +254,13 @@ class WebSocketHandler:
         except Exception as e:
             logging.error(f"JSON-RPC call error: {method}, {e}")
             return None
+
+    async def initialize_values(self, websocket):
+        """Initialize the latest values and file list from the printer."""
+        result = await self.send_jsonrpc("printer.objects.query", {"objects": TRACKED_OBJECTS})
+        logging.info(f"result: {result}")
+        self.latest_values = result.get("status")
+        logging.info("Initialized latest values from printer.")
 
     async def query_file_list(self):
         """Get the list of files."""
