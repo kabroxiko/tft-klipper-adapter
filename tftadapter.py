@@ -438,8 +438,7 @@ class TFTAdapter:
             await self.websocket_handler.call_moonraker_script(f"M109 S{extruder_temp}")
             await self.set_led_color("R0 U255 B255 W255 P255 I255") # prime
 
-        elif gcode in {"M82"}:  # Send directly to Moonraker
-            # M82: Set extruder to absolute mode
+        elif gcode in {"M82"}:  # Set extruder to absolute mode
             await self.websocket_handler.call_moonraker_script(request)
             return "ok"
         elif gcode in {"G28", "G0", "G1", "M420", "M21", "M84", "G90", "G91", "M82", "M23", "M24", "M25", "M118", "M106", "M104", "M140", "M280", "M48"}:  # Send directly to Moonraker
