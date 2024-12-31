@@ -106,9 +106,9 @@ TRACKED_OBJECTS = {
     "configfile": ["settings"],
     "fan": ["speed"],
     "virtual_sdcard": ["file_position", "file_size"],
+    "print_stats": ["state"],
     "probe": ["last_query", "last_z_result"],
-    "print_stats": None,
-    "filament_switch_sensor filament_sensor": None
+    "filament_switch_sensor filament_sensor": ["enabled"]
 }
 
 class SerialHandler:
@@ -297,7 +297,6 @@ class TFTAdapter:
         self.auto_report_position = 0
         self.auto_report_print_status = 0
         self.selected_file = 0
-        self.paused = False
 
     async def serial_reader(self):
         while True:
@@ -469,15 +468,14 @@ class TFTAdapter:
             self.selected_file = parameters
             return await self.websocket_handler.call_moonraker_script(request)
         elif gcode == "M24":   # Start/resume SD card print
-            if self.paused:
-                self.pause = False
+            if self.websocket_handler.latest_values.get("print_stats").get("state") == "paused":
                 return await self.websocket_handler.resume_print()
-            else:
+            elif self.websocket_handler.latest_values.get("print_stats").get("state") != "printing":
                 await self.websocket_handler.call_moonraker_script('CLEAR_PAUSE')
                 return await self.websocket_handler.start_print(self.selected_file)
         elif gcode == "M25":   # Pause SD card print
-            self.paused = True
-            return await self.websocket_handler.pause_print()
+            if self.websocket_handler.latest_values.get("print_stats").get("state") != "printing":
+                return await self.websocket_handler.pause_print()
         elif gcode == "M524":  # Cancel current print
             return await self.websocket_handler.cancel_print()
         elif gcode in {"M82"}:  # Set extruder to absolute mode
