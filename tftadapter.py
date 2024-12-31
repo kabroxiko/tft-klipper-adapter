@@ -270,6 +270,14 @@ class WebSocketHandler:
         """Start a print."""
         return await self.send_moonraker_request("printer.print.start", {"filename": filename})
 
+    async def pause_print(self):
+        """Pause the current print."""
+        return await self.send_moonraker_request("printer.print.pause")
+
+    async def resume_print(self):
+        """Pause the current print."""
+        return await self.send_moonraker_request("printer.print.resume")
+
     async def cancel_print(self):
         """Cancel the current print."""
         return await self.send_moonraker_request("printer.print.cancel")
@@ -283,6 +291,7 @@ class TFTAdapter:
         self.auto_report_position = 0
         self.auto_report_print_status = 0
         self.selected_file = 0
+        self.paused = False
 
     async def serial_reader(self):
         while True:
@@ -344,7 +353,6 @@ class TFTAdapter:
             "M20":  FILE_LIST_TEMPLATE,         # List files on the SD card
         }
         gcode_handlers = {
-            "M24":  lambda _: self.websocket_handler.start_print(self.selected_file),
             "M524": lambda _: self.websocket_handler.cancel_print()
         }
         handler = gcode_handlers.get(gcode, None)
@@ -447,7 +455,15 @@ class TFTAdapter:
             self.selected_file = parameters
             return await self.websocket_handler.call_moonraker_script(request)
         elif gcode == "M24":   # Start/resume SD card print
-            return await self.websocket_handler.start_print(self.selected_file)
+            if self.paused:
+                self.pause = False
+                return await self.websocket_handler.resume_print()
+            else:
+                await self.websocket_handler.call_moonraker_script('CLEAR_PAUSE')
+                return await self.websocket_handler.start_print(self.selected_file)
+        elif gcode == "M25":   # Pause SD card print
+            self.paused = True
+            return await self.websocket_handler.pause_print()
         elif gcode == "M524":  # Cancel current print
             return await self.websocket_handler.cancel_print()
         elif gcode in {"M82"}:  # Set extruder to absolute mode
@@ -460,10 +476,9 @@ class TFTAdapter:
             # M92: Set axis steps per unit
             # T0: Select tool 0
             return "ok"
-        elif gcode in {"G28", "G0", "G1", "M420", "M21", "M84", "G90", "G91", "M25", "M106", "M104", "M140", "M48"}:  # Send directly to Moonraker
+        elif gcode in {"G28", "G0", "G1", "M420", "M21", "M84", "G90", "G91", "M106", "M104", "M140", "M48", "M290", "M851"}:  # Send directly to Moonraker
             # M21: Initialize the SD card
             # G90: Set to absolute positioning
-            # M25: Pause SD card print
             return await self.websocket_handler.call_moonraker_script(request)
 
         # Fallback for unknown commands
