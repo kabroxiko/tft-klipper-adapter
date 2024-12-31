@@ -293,6 +293,7 @@ class TFTAdapter:
         self.serial_handler = serial_handler
         self.websocket_handler = websocket_handler
         self.gcode_queue = Queue()
+        self.message_queue = websocket_handler.message_queue
         self.auto_report_temperature = 0
         self.auto_report_position = 0
         self.auto_report_print_status = 0
@@ -302,7 +303,7 @@ class TFTAdapter:
         while True:
             gcode = self.serial_handler.read()
             if gcode:
-                logging.debug(f"Received G-code from serial: {gcode}")
+                logging.info(f"Received G-code from serial: {gcode}")
                 self.gcode_queue.put(gcode)
             await asyncio.sleep(0.1)
 
@@ -311,17 +312,17 @@ class TFTAdapter:
             if not self.gcode_queue.empty():
                 gcode = self.gcode_queue.get()
                 logging.info(f"Processing G-code: {gcode}")
-                response = await self.handle_gcode(gcode)
-                if response and response != "":
-                    logging.info(f"G-code response: {repr(response)}")
-                    messages = response.split("\n")
-                    for message in messages:
-                        if message.startswith("!!"):
-                            message = f"{{Error:{message}"
-
-                        if message.strip():  # Avoid sending empty lines
-                            self.serial_handler.write(message)
-
+                await self.handle_gcode(gcode)
+                while not self.message_queue.empty():
+                    response = self.message_queue.get()
+                    if response and response != "":
+                        logging.info(f"G-code response: {repr(response)}")
+                        messages = response.split("\n")
+                        for message in messages:
+                            if message.startswith("!!"):
+                                message = f"{{Error:{message}"
+                            if message.strip():  # Avoid sending empty lines
+                                self.serial_handler.write(message)
             await asyncio.sleep(0.1)
 
     async def periodic_update_report(self, auto_report_interval, template, prefix_ok=False):
@@ -369,17 +370,22 @@ class TFTAdapter:
                 state = {
                     "state": "On" if self.websocket_handler.latest_values["filament_switch_sensor filament_sensor"]["enabled"] else "Off"
                 }
-                return f"{template.render(**state)}\nok"
+                response = f"{template.render(**state)}\nok"
             elif gcode == "M20":  # List the files stored on the SD card
                 result = await self.websocket_handler.query_file_list()
                 file_list = {file["path"]: {"size": file["size"]} for file in result}
-                return f"{template.render(file_list=file_list)}\nok"
+                response = f"{template.render(file_list=file_list)}\nok"
             elif gcode in ("M220", "M221") and params_dict:
-                return await self.websocket_handler.call_moonraker_script(request)
-            return f"{template.render(**self.websocket_handler.latest_values)}\nok"
+                response = await self.websocket_handler.call_moonraker_script(request)
+            else:
+                response = f"{template.render(**self.websocket_handler.latest_values)}\nok"
+            self.message_queue.put(response)
+            return
 
         elif handler:
-            return await handler(parameters)
+            response = await handler(parameters)
+            self.message_queue.put(response)
+            return
 
         # Auto-report G-codes
         elif gcode == "M154":  # Enable/disable auto-reporting of position
@@ -390,15 +396,19 @@ class TFTAdapter:
             self.auto_report_print_status = int(params_dict.get("S", 0))
 
         elif gcode == "M33":  # Mock response for SD card operations
-            return f"{parameters}\nok"
+            self.message_queue.put(f"{parameters}\nok")
+            return
 
         elif gcode == "G29":  # Bed Leveling (Unified)
-            return await self.websocket_handler.call_moonraker_script(
+            response = await self.websocket_handler.call_moonraker_script(
                 ["BED_MESH_CLEAR", f"BED_MESH_CALIBRATE {params_dict if params_dict else ''}"]
             )
+            self.message_queue.put(response)
+            return
         elif gcode == "M112":  # Emergency Stop
             await self.websocket_handler.call_moonraker_script("M112")
-            return f"{{Error:Emergency Stop"
+            self.message_queue.put(f"{{Error:Emergency Stop")
+            return
 
         # Special G-codes with parameter-specific behavior
         elif gcode in ("M201", "M203", "M206"):
@@ -411,10 +421,14 @@ class TFTAdapter:
             elif gcode == "M206" and any(key in params_dict for key in ("X", "Y", "Z", "E")):  # Set home offset
                 offsets = " ".join(f"{axis}={value}" for axis, value in params_dict.items() if axis in ("X", "Y", "Z", "E"))
                 command = f"SET_GCODE_OFFSET {offsets}"
-            return await self.websocket_handler.call_moonraker_script(command)
+            response = await self.websocket_handler.call_moonraker_script(command)
+            self.message_queue.put(response)
+            return
 
         elif gcode == "M150":  # Set LED color
-            return await self.set_led_color(params_dict)
+            response = await self.set_led_color(params_dict)
+            self.message_queue.put(response)
+            return
         elif gcode in ("M701", "M702"):  # Filament load/unload
             length = 25
             params_dict = {
@@ -422,13 +436,17 @@ class TFTAdapter:
                 'T': params_dict.get("T", 0),
                 'Z': params_dict.get("Z", 0)
             }
-            return await self.handle_filament(params_dict)
+            response = await self.handle_filament(params_dict)
+            self.message_queue.put(response)
+            return
         elif gcode == "M118":  # Display message
             # TODO: Complete rest of options
             if request == "M118 P0 A1 action:cancel":
-                return "//action:cancel"
+                self.message_queue.put("//action:cancel")
             else:
-                return await self.websocket_handler.call_moonraker_script(request)
+                response = await self.websocket_handler.call_moonraker_script(request)
+                self.message_queue.put(response)
+            return
 
         elif gcode == "M280":  # Servo Position
             servo_id = int(params_dict.get('P', 0))
@@ -436,7 +454,7 @@ class TFTAdapter:
             bltouch = True  # TODO: Use config to determine BLTouch availability
             if position == 120:  # Test
                 await self.websocket_handler.call_moonraker_script("QUERY_PROBE")
-                return f"{PROBE_TEST_TEMPLATE.render(**self.websocket_handler.latest_values)}\nok"
+                response = f"{PROBE_TEST_TEMPLATE.render(**self.websocket_handler.latest_values)}\nok"
             else:
                 if bltouch:
                     value = {
@@ -452,53 +470,77 @@ class TFTAdapter:
                         160: "0"
                     }.get(position)
                     command = f"SET_PIN PIN=_probe_enable VALUE={value}"
-            return await self.websocket_handler.call_moonraker_script(command)
+                response = await self.websocket_handler.call_moonraker_script(command)
+            self.message_queue.put(response)
+            return
 
         elif gcode == "M290":  # Babystep
             Z = params_dict.get('Z')
-            return await self.websocket_handler.call_moonraker_script(
+            response = await self.websocket_handler.call_moonraker_script(
                 f"SET_GCODE_OFFSET Z_ADJUST={Z}"
             )
+            self.message_queue.put(response)
+            return
         elif gcode == "M851":  # XYZ Probe Offset
-            return f"{PROBE_OFFSET_TEMPLATE.render(**self.websocket_handler.latest_values)}\nok"
+            response = f"{PROBE_OFFSET_TEMPLATE.render(**self.websocket_handler.latest_values)}\nok"
+            self.message_queue.put(response)
+            return
         elif gcode == "M500":  # Save Settings
             if self.websocket_handler.latest_values.get("print_stats").get("state") in ("paused", "printing"):
-                return "{{Error:Not saved - Printing"
+                self.message_queue.put("{{Error:Not saved - Printing")
             else:
-                return await self.websocket_handler.call_moonraker_script(
+                response = await self.websocket_handler.call_moonraker_script(
                     ["Z_OFFSET_APPLY_PROBE", "SAVE_CONFIG"]
                 )
+                self.message_queue.put(response)
+            return
 
         elif gcode == "M108":  # Special empty response
-            return ""
+            self.message_queue.put("")
+            return
         elif gcode == "M23":   # Select an SD card file for printing
             self.selected_file = parameters
-            return await self.websocket_handler.call_moonraker_script(request)
+            response = await self.websocket_handler.call_moonraker_script(request)
+            self.message_queue.put(response)
+            return
         elif gcode == "M24":   # Start/resume SD card print
             if self.websocket_handler.latest_values.get("print_stats").get("state") == "paused":
-                return await self.websocket_handler.resume_print()
+                response = await self.websocket_handler.resume_print()
             elif self.websocket_handler.latest_values.get("print_stats").get("state") != "printing":
+                logging.info("Starting print: {self.selected_file}")
                 await self.websocket_handler.call_moonraker_script('CLEAR_PAUSE')
-                return await self.websocket_handler.start_print(self.selected_file)
+                response = await self.websocket_handler.start_print(self.selected_file)
+            else:
+                response = "echo:SD printing already in progress"
+            self.message_queue.put(response)
+            return
         elif gcode == "M25":   # Pause SD card print
             if self.websocket_handler.latest_values.get("print_stats").get("state") != "printing":
-                return await self.websocket_handler.pause_print()
+                response = await self.websocket_handler.pause_print()
+                self.message_queue.put(response)
+            return
         elif gcode == "M524":  # Cancel current print
-            return await self.websocket_handler.cancel_print()
+            response = await self.websocket_handler.cancel_print()
+            self.message_queue.put(response)
+            return
         elif gcode in {"M82"}:  # Set extruder to absolute mode
             await self.websocket_handler.call_moonraker_script(request)
-            return "ok"
+            self.message_queue.put("ok")
+            return
 
         # Commands with no action or immediate acknowledgment
         elif gcode in {"M22", "M92", "T0"}:  # Acknowledge with "ok"
             # M22: Release the SD card
             # M92: Set axis steps per unit
             # T0: Select tool 0
-            return "ok"
+            self.message_queue.put("ok")
+            return
         elif gcode in {"G28", "G0", "G1", "M420", "M21", "M84", "G90", "G91", "M106", "M104", "M140", "M48"}:  # Send directly to Moonraker
             # M21: Initialize the SD card
             # G90: Set to absolute positioning
-            return await self.websocket_handler.call_moonraker_script(request)
+            response = await self.websocket_handler.call_moonraker_script(request)
+            self.message_queue.put(response)
+            return
 
         # Fallback for unknown commands
         else:
