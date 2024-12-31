@@ -396,7 +396,7 @@ class TFTAdapter:
             return await self.websocket_handler.call_moonraker_script(
                 ["BED_MESH_CLEAR", f"BED_MESH_CALIBRATE {params_dict if params_dict else ''}"]
             )
-        elif gcode == "M112":  # Bed Leveling (Unified)
+        elif gcode == "M112":  # Emergency Stop
             await self.websocket_handler.call_moonraker_script("M112")
             return f"{{Error:Emergency Stop"
 
@@ -431,27 +431,27 @@ class TFTAdapter:
                 return await self.websocket_handler.call_moonraker_script(request)
 
         elif gcode == "M280":  # Servo Position
-            servo_id = int(params_dict.get('P', 0))  # Default to 0 if 'P' is missing
-            position = int(params_dict.get('S', 0))  # Default to 0 if 'S' is missing
-            bltouch = True # TODO: if configfile.settings.bltouch
-            # TODO: // Unknown command:"M48"
-
-            if position == 120: # Test
+            servo_id = int(params_dict.get('P', 0))
+            position = int(params_dict.get('S', 0))
+            bltouch = True  # TODO: Use config to determine BLTouch availability
+            if position == 120:  # Test
                 await self.websocket_handler.call_moonraker_script("QUERY_PROBE")
                 return f"{PROBE_TEST_TEMPLATE.render(**self.websocket_handler.latest_values)}\nok"
             else:
                 if bltouch:
-                    if position == 10: # Deploy
-                        command = "BLTOUCH_DEBUG COMMAND=pin_down"
-                    elif position == 90: # Stow
-                        command = "BLTOUCH_DEBUG COMMAND=pin_up"
-                    elif position == 160:  # Reset
-                        command = "BLTOUCH_DEBUG COMMAND=reset"
+                    value = {
+                        10: "pin_down",
+                        90: "pin_up",
+                        160: "reset"
+                    }.get(position)
+                    command = f"BLTOUCH_DEBUG COMMAND={value}"
                 else:
-                    if position == 10: # Deploy
-                        command = "SET_PIN PIN=_probe_enable VALUE=1"
-                    if position in (90, 160):
-                        command = "SET_PIN PIN=_probe_enable VALUE=0"
+                    command = {
+                        10: "1",
+                        90: "0",
+                        160: "0"
+                    }.get(position)
+                    command = f"SET_PIN PIN=_probe_enable VALUE={value}"
             return await self.websocket_handler.call_moonraker_script(command)
 
         elif gcode == "M290":  # Babystep
