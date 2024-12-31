@@ -461,6 +461,13 @@ class TFTAdapter:
             )
         elif gcode == "M851":  # XYZ Probe Offset
             return f"{PROBE_OFFSET_TEMPLATE.render(**self.websocket_handler.latest_values)}\nok"
+        elif gcode == "M500":  # Save Settings
+            if self.websocket_handler.latest_values.get("print_stats").get("state") in ("paused", "printing"):
+                return "{{Error:Not saved - Printing"
+            else:
+                return await self.websocket_handler.call_moonraker_script(
+                    ["Z_OFFSET_APPLY_PROBE", "SAVE_CONFIG"]
+                )
 
         elif gcode == "M108":  # Special empty response
             return ""
