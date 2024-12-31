@@ -52,6 +52,12 @@ REPORT_SETTINGS_TEMPLATE = Template(
     "M106 S{{ fan.speed }}"
 )
 
+PROBE_OFFSET_TEMPLATE = Template(
+    "M851 X{{ configfile.settings.bltouch.x_offset - gcode_move.homing_origin[0] }} "
+    "Y{{ configfile.settings.bltouch.y_offset - gcode_move.homing_origin[1] }} "
+    "Z{{ configfile.settings.bltouch.z_offset - gcode_move.homing_origin[2] }}"
+)
+
 FIRMWARE_INFO_TEMPLATE = Template(
     "FIRMWARE_NAME:Klipper {{ mcu.mcu_version }} "
     "SOURCE_CODE_URL:https://github.com/Klipper3d/klipper "
@@ -338,7 +344,7 @@ class TFTAdapter:
         gcode, *parameters = request.split(maxsplit=1)
         parameters = parameters[0] if parameters else None
         params_dict = {
-            key: int(value) for key, value in re.findall(r"([A-Z])(\d+)", parameters)
+            key: value for key, value in re.findall(r"([A-Z])(-?\d+\.?\d*)", parameters)
         } if parameters else {}
 
         # Predefined G-code handlers
@@ -378,11 +384,11 @@ class TFTAdapter:
 
         # Auto-report G-codes
         elif gcode == "M154":  # Enable/disable auto-reporting of position
-            self.auto_report_position = params_dict.get("S", 0)
+            self.auto_report_position = int(params_dict.get("S", 0))
         elif gcode == "M155":  # Enable/disable auto-reporting of temperature
-            self.auto_report_temperature = params_dict.get("S", 0)
+            self.auto_report_temperature = int(params_dict.get("S", 0))
         elif gcode == "M27":  # Enable/disable auto-report print status
-            self.auto_report_print_status = params_dict.get("S", 0)
+            self.auto_report_print_status = int(params_dict.get("S", 0))
 
         elif gcode == "M33":  # Mock response for SD card operations
             return f"{parameters}\nok"
@@ -449,6 +455,14 @@ class TFTAdapter:
                         command = "SET_PIN PIN=_probe_enable VALUE=0"
             return await self.websocket_handler.call_moonraker_script(command)
 
+        elif gcode == "M290":  # Babystep
+            Z = params_dict.get('Z')
+            return await self.websocket_handler.call_moonraker_script(
+                f"SET_GCODE_OFFSET Z_ADJUST={Z}"
+            )
+        elif gcode == "M851":  # XYZ Probe Offset
+            return f"{PROBE_OFFSET_TEMPLATE.render(**self.websocket_handler.latest_values)}\nok"
+
         elif gcode == "M108":  # Special empty response
             return ""
         elif gcode == "M23":   # Select an SD card file for printing
@@ -476,7 +490,7 @@ class TFTAdapter:
             # M92: Set axis steps per unit
             # T0: Select tool 0
             return "ok"
-        elif gcode in {"G28", "G0", "G1", "M420", "M21", "M84", "G90", "G91", "M106", "M104", "M140", "M48", "M290", "M851"}:  # Send directly to Moonraker
+        elif gcode in {"G28", "G0", "G1", "M420", "M21", "M84", "G90", "G91", "M106", "M104", "M140", "M48"}:  # Send directly to Moonraker
             # M21: Initialize the SD card
             # G90: Set to absolute positioning
             return await self.websocket_handler.call_moonraker_script(request)
