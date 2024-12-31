@@ -97,6 +97,7 @@ FILE_LIST_TEMPLATE = Template(
     "End file list"
 )
 
+# Define tracked objects and fields
 TRACKED_OBJECTS = {
     "extruder": ["temperature", "target"],
     "heater_bed": ["temperature", "target"],
@@ -108,7 +109,7 @@ TRACKED_OBJECTS = {
     "virtual_sdcard": ["file_position", "file_size"],
     "print_stats": ["state"],
     "probe": ["last_query", "last_z_result"],
-    "filament_switch_sensor filament_sensor": ["enabled"]
+    "filament_switch_sensor filament_sensor": ["enabled"],
 }
 
 class SerialHandler:
@@ -141,152 +142,104 @@ class SerialHandler:
 class WebSocketHandler:
     def __init__(self, websocket_url, message_queue):
         self.websocket_url = websocket_url
+        self.websocket = None
         self.message_queue = message_queue
         self.latest_values = {}
-        self.retry_delay = 1
 
-    async def handler(self):
-        """Handle WebSocket messages and ensure reconnection."""
+    async def connect(self):
+        """Connect to the WebSocket and maintain the connection."""
         while True:
             try:
-                async with connect(self.websocket_url) as websocket:
-                    logging.info("Connected to WebSocket.")
-                    await self.initialize_values(websocket)
-                    await self.subscribe_to_printer_objects(websocket)
-                    await self.listen_to_websocket(websocket)
+                self.websocket = await connect(self.websocket_url)
+                logging.info("Connected to WebSocket.")
+                # await self.send_moonraker_request("printer.objects.subscribe", {"objects": TRACKED_OBJECTS}, 2)
+                await self.initialize_values()
+                break
             except Exception as e:
-                logging.error(f"WebSocket connection error: {e}. Retrying in {self.retry_delay} seconds...")
-                await asyncio.sleep(self.retry_delay)
-                self.retry_delay = min(self.retry_delay * 2, 60)  # Exponential backoff, max 60 seconds
-
-    async def listen_to_websocket(self, websocket):
-        """Listen to WebSocket messages and process them."""
-        try:
-            while True:
-                message = await websocket.recv()
-                self.handle_message(message)
-        except Exception as e:
-            logging.error(f"Error in WebSocket listener: {e}")
-            raise  # Trigger reconnection
-
-    async def subscribe_to_printer_objects(self, websocket):
-        subscription_message = json.dumps({
-            "jsonrpc": "2.0",
-            "method": "printer.objects.subscribe",
-            "params": {
-                "objects": TRACKED_OBJECTS
-            }
-        })
-        await websocket.send(subscription_message)
-        logging.info("Subscribed to printer object updates.")
-
-    async def call_moonraker_script(self, scripts):
-        """Send a single or multiple G-codes to Moonraker and wait for the responses."""
-        try:
-            if isinstance(scripts, str):
-                scripts = [scripts]
-            elif isinstance(scripts, list):
-                scripts = scripts
-            else:
-                raise ValueError("Invalid script format. Must be a string or a list of strings.")
-
-            responses = []
-            async with connect(self.websocket_url) as websocket:
-                for script in scripts:
-                    message_id = id(script)  # Generate a unique ID for each request
-                    logging.info(f"Call Moonraker script: {script}")
-                    gcode_message = json.dumps({
-                        "jsonrpc": "2.0",
-                        "method": "printer.gcode.script",
-                        "params": {"script": script},
-                        "id": message_id
-                    })
-                    await websocket.send(gcode_message)
-
-                    # Wait for a response with matching ID
-                    response_message = ""
-                    while True:
-                        response = json.loads(await websocket.recv())
-                        logging.debug(f"Response: {response}")
-                        if response.get("method") == "notify_gcode_response":
-                            response_message += f"{response['params'][0]}\n"
-                        elif response.get("id") == message_id:
-                            response_message += f"{response.get('result', '')}\n"
-                            break
-                    responses.append(response_message.strip())
-
-            return "\n".join(responses)
-
-        except Exception as e:
-            logging.error(f"Error sending G-code(s) to Moonraker: {e}")
-            return None
-
-    def handle_message(self, message):
-        logging.debug(f"Processing WebSocket message: {message}")
-        try:
-            data = json.loads(message)
-            if data is not None:
-                if data.get("method") == "notify_status_update":
-                    logging.debug(f"Update: {data.get('params')[0]}")
-                    self.update_latest_values(data.get("params")[0])
-                elif data.get("method") == "notify_gcode_response":
-                    self.message_queue.put(data["params"][0])
-        except Exception as e:
-            logging.error(f"Error processing WebSocket message: {e}")
-
-    def update_latest_values(self, updates):
-        logging.debug(f"Update latest_values: {updates}")
-        for key, values in updates.items():
-            if key in self.latest_values:
-                self.latest_values[key].update(values)
+                logging.error(f"Error connecting to WebSocket: {e}")
+                await asyncio.sleep(5)  # Retry after delay
 
     async def send_moonraker_request(self, method, params=None, request_id=None):
         """Send a JSON-RPC request and return the response."""
+        request = {
+            "jsonrpc": "2.0",
+            "method": method,
+            "params":  params or {},
+            "id": request_id,
+        }
         try:
-            async with connect(self.websocket_url) as websocket:
-                request_id = request_id or int.from_bytes(os.urandom(2), "big")  # Generate a unique ID
-                request = {
-                    "jsonrpc": "2.0",
-                    "method": method,
-                    "params": params or {},
-                    "id": request_id,
-                }
-                await websocket.send(json.dumps(request))
-
-                while True:
-                    response = json.loads(await websocket.recv())
-                    if response.get("id") == request_id:
-                        return response.get("result", {})
+            await self.websocket.send(json.dumps(request))
+            logging.info("Request sent.")
         except Exception as e:
-            logging.error(f"JSON-RPC call error: {method}, {e}")
-            return None
+            logging.error(f"Error sending request: {e}")
 
-    async def initialize_values(self, websocket):
+    async def receive(self):
+        """Receive messages from the WebSocket."""
+        try:
+            async for message in self.websocket:
+                await self.handle_message(message)
+        except Exception as e:
+            logging.error(f"Error receiving WebSocket message: {e}")
+            await self.connect()  # Reconnect on error
+
+    async def handle_message(self, message):
+        """Process incoming WebSocket message."""
+        logging.debug(f"Processing WebSocket message: {message}")
+        # try:
+        data = json.loads(message)
+        if data.get("id") is not None:
+            logging.info(f"message: {message}")
+
+        if data.get("method") == "notify_status_update":
+            updates = data["params"][0]
+            self.update_latest_values(updates)
+        elif data.get("method") == "notify_gcode_response" or data.get("id") is not None:
+            self.message_queue.put(data)
+        # except Exception as e:
+        #     logging.error(f"Error processing WebSocket message: {e}")
+
+    def update_latest_values(self, updates):
+        """Update the latest values from WebSocket messages."""
+        for key, value in updates.items():
+            self.latest_values[key] = value
+        logging.info(f"Updated values: {self.latest_values}")
+
+    async def periodic_resubscription(self, interval=300):
+        """Periodically resubscribe to tracked objects."""
+        while True:
+            await asyncio.sleep(interval)
+            await self.send_moonraker_request("printer.objects.subscribe", {"objects": TRACKED_OBJECTS}, 2)
+
+    def add_listener(self, listener):
+        """Add a listener for processing messages."""
+        self.listener = listener
+
+    async def process_queue_by_id(self, target_id):
+        """Process the message queue and return a message that matches the target ID."""
+        while True:
+            try:
+                message = self.message_queue.get_nowait()
+                if "id" in message and message["id"] == target_id:
+                    logging.info(f"Message found for ID {target_id}: {message}")
+                    return message
+            except Exception:
+                await asyncio.sleep(0.1)  # Avoid busy-waiting
+
+    async def close(self):
+        """Close the WebSocket connection."""
+        if self.websocket:
+            await self.websocket.close()
+            logging.info("WebSocket connection closed.")
+
+    async def initialize_values(self):
         """Initialize the latest values and file list from the printer."""
-        result = await self.send_moonraker_request("printer.objects.query", {"objects": TRACKED_OBJECTS})
+
+        await self.send_moonraker_request("printer.objects.query", {"objects": TRACKED_OBJECTS}, id(self))
+        # await self.receive()
+        result = await self.process_queue_by_id(id(self))
         logging.info(f"result: {result}")
         self.latest_values = result.get("status")
         logging.info("Initialized latest values from printer.")
-
-    async def query_file_list(self):
-        """Get the list of files."""
-        return await self.send_moonraker_request("server.files.list", {"path": ""})
-
-    async def start_print(self, filename):
-        """Start a print."""
-        return await self.send_moonraker_request("printer.print.start", {"filename": filename})
-
-    async def pause_print(self):
-        """Pause the current print."""
-        return await self.send_moonraker_request("printer.print.pause")
-
-    async def resume_print(self):
-        """Pause the current print."""
-        return await self.send_moonraker_request("printer.print.resume")
-
-    async def cancel_print(self):
-        """Cancel the current print."""
-        return await self.send_moonraker_request("printer.print.cancel")
 
 class TFTAdapter:
     def __init__(self, serial_handler, websocket_handler):
@@ -542,26 +495,21 @@ async def main():
                         filename=args.log_file, filemode='a' if args.log_file else None)
 
     message_queue = Queue()
-    serial_handler = SerialHandler(args.serial_port, args.baud_rate)
     websocket_handler = WebSocketHandler(args.websocket_url, message_queue)
-    tft_adapter = TFTAdapter(serial_handler, websocket_handler)
+    await websocket_handler.connect()
 
+    serial_handler = SerialHandler(args.serial_port, args.baud_rate)
     serial_handler.initialize()
 
-    await asyncio.gather(
-        websocket_handler.handler(),
-        tft_adapter.serial_reader(),
-        tft_adapter.process_gcode_queue(),
-        tft_adapter.periodic_update_report(
-            "auto_report_position", POSITION_TEMPLATE
-        ),
-        tft_adapter.periodic_update_report(
-            "auto_report_temperature", TEMPERATURE_TEMPLATE, prefix_ok=True
-        ),
-        tft_adapter.periodic_update_report(
-            "auto_report_print_status", PRINT_STATUS_TEMPLATE
-        )
-    )
+    tft_adapter = TFTAdapter(serial_handler, websocket_handler)
+
+    # Run tasks concurrently
+    # await asyncio.gather(
+    #     tft_adapter.serial_reader(),
+    #     # tft_adapter.process_gcode_queue(),
+    #     websocket_handler.receive(),
+    #     websocket_handler.periodic_resubscription()
+    # )
 
 if __name__ == "__main__":
     asyncio.run(main())
