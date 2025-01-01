@@ -189,19 +189,24 @@ class WebSocketHandler:
                 elif params is None:
                     params = [{}]
 
-                request_id = int.from_bytes(os.urandom(2), "big")  # Generate a unique ID
-                request = {
-                    "jsonrpc": "2.0",
-                    "method": method,
-                    "params": params[0],
-                    "id": request_id,
-                }
-                await websocket.send(json.dumps(request))
+                responses = []
+                for param in params:
+                    request_id = int.from_bytes(os.urandom(2), "big")  # Generate a unique ID
+                    request = {
+                        "jsonrpc": "2.0",
+                        "method": method,
+                        "params": param,
+                        "id": request_id,
+                    }
+                    await websocket.send(json.dumps(request))
 
-                while True:
-                    response = json.loads(await websocket.recv())
-                    if response.get("id") == request_id:
-                        return response.get("result", {})
+                    while True:
+                        response = json.loads(await websocket.recv())
+                        if response.get("id") == request_id:
+                            responses.append(response.get("result", {}))
+                            break
+
+                return responses if len(responses) > 1 else responses[0]
         except Exception as e:
             logging.error(f"JSON-RPC call error: {method}, {e}")
             return None
