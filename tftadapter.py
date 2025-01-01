@@ -208,24 +208,17 @@ class WebSocketHandler:
 
     async def call_moonraker_script(self, scripts):
         """Send a single or multiple G-codes to Moonraker and wait for the responses."""
-        try:
-            if isinstance(scripts, str):
-                scripts = [scripts]
-            elif isinstance(scripts, list):
-                scripts = scripts
-            else:
-                raise ValueError("Invalid script format. Must be a string or a list of strings.")
+        if isinstance(scripts, str):
+            scripts = [scripts]
+        elif not isinstance(scripts, list):
+            raise ValueError("Invalid script format. Must be a string or a list of strings.")
 
-            responses = await self.send_moonraker_request(
-                "printer.gcode.script",
-                params=[{"script": script} for script in scripts]
-            )
+        responses = await self.send_moonraker_request(
+            "printer.gcode.script",
+            params=[{"script": script} for script in scripts]
+        )
 
-            return "\n".join(responses) if responses else None
-
-        except Exception as e:
-            logging.error(f"Error sending G-code(s) to Moonraker: {e}")
-            return None
+        return "\n".join(responses) if responses else None
 
     def handle_message(self, message):
         logging.debug(f"Processing WebSocket message: {message}")
