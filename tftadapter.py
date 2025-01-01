@@ -180,6 +180,41 @@ class WebSocketHandler:
         await websocket.send(subscription_message)
         logging.info("Subscribed to printer object updates.")
 
+    async def send_moonraker_request(self, methods, params=None, request_id=None):
+        """Send one or multiple JSON-RPC requests and return the responses."""
+        try:
+            async with connect(self.websocket_url) as websocket:
+                if isinstance(methods, str):
+                    methods = [methods]
+                if isinstance(params, dict):
+                    params = [params] * len(methods)
+                elif params is None:
+                    params = [{}] * len(methods)
+                elif isinstance(params, list) and len(params) != len(methods):
+                    raise ValueError("Length of params list must match length of methods list.")
+
+                responses = []
+                for method, param in zip(methods, params):
+                    request_id = request_id or int.from_bytes(os.urandom(2), "big")  # Generate a unique ID
+                    request = {
+                        "jsonrpc": "2.0",
+                        "method": method,
+                        "params": param,
+                        "id": request_id,
+                    }
+                    await websocket.send(json.dumps(request))
+
+                    while True:
+                        response = json.loads(await websocket.recv())
+                        if response.get("id") == request_id:
+                            responses.append(response.get("result", {}))
+                            break
+
+                return responses if len(responses) > 1 else responses[0]
+        except Exception as e:
+            logging.error(f"JSON-RPC call error: {methods}, {e}")
+            return None
+
     async def call_moonraker_script(self, scripts):
         """Send a single or multiple G-codes to Moonraker and wait for the responses."""
         try:
@@ -190,32 +225,12 @@ class WebSocketHandler:
             else:
                 raise ValueError("Invalid script format. Must be a string or a list of strings.")
 
-            responses = []
-            async with connect(self.websocket_url) as websocket:
-                for script in scripts:
-                    message_id = id(script)  # Generate a unique ID for each request
-                    logging.info(f"Call Moonraker script: {script}")
-                    gcode_message = json.dumps({
-                        "jsonrpc": "2.0",
-                        "method": "printer.gcode.script",
-                        "params": {"script": script},
-                        "id": message_id
-                    })
-                    await websocket.send(gcode_message)
+            responses = await self.send_moonraker_request(
+                methods=["printer.gcode.script"] * len(scripts),
+                params=[{"script": script} for script in scripts]
+            )
 
-                    # Wait for a response with matching ID
-                    response_message = ""
-                    while True:
-                        response = json.loads(await websocket.recv())
-                        logging.debug(f"Response: {response}")
-                        if response.get("method") == "notify_gcode_response":
-                            response_message += f"{response['params'][0]}\n"
-                        elif response.get("id") == message_id:
-                            response_message += f"{response.get('result', '')}\n"
-                            break
-                    responses.append(response_message.strip())
-
-            return "\n".join(responses)
+            return "\n".join(responses) if responses else None
 
         except Exception as e:
             logging.error(f"Error sending G-code(s) to Moonraker: {e}")
@@ -239,27 +254,6 @@ class WebSocketHandler:
         for key, values in updates.items():
             if key in self.latest_values:
                 self.latest_values[key].update(values)
-
-    async def send_moonraker_request(self, method, params=None, request_id=None):
-        """Send a JSON-RPC request and return the response."""
-        try:
-            async with connect(self.websocket_url) as websocket:
-                request_id = request_id or int.from_bytes(os.urandom(2), "big")  # Generate a unique ID
-                request = {
-                    "jsonrpc": "2.0",
-                    "method": method,
-                    "params": params or {},
-                    "id": request_id,
-                }
-                await websocket.send(json.dumps(request))
-
-                while True:
-                    response = json.loads(await websocket.recv())
-                    if response.get("id") == request_id:
-                        return response.get("result", {})
-        except Exception as e:
-            logging.error(f"JSON-RPC call error: {method}, {e}")
-            return None
 
     async def initialize_values(self, websocket):
         """Initialize the latest values and file list from the printer."""
