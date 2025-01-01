@@ -17,48 +17,48 @@ MACHINE_TYPE = "Artillery Genius Pro"
 # //action:{{ action }}
 # {{ command }}
 
-PRINT_STATUS_TEMPLATE = Template(
+PRINT_STATUS_TEMPLATE = (
     "//action:notification Layer Left {{ (virtual_sdcard.file_position or 0) }}/{{ (virtual_sdcard.file_size or 0) }}"
 )
 
-TEMPERATURE_TEMPLATE = Template(
+TEMPERATURE_TEMPLATE = (
     "T:{{ extruder.temperature | round(2) }} /{{ extruder.target | round(2) }} "
     "B:{{ heater_bed.temperature | round(2) }} /{{ heater_bed.target | round(2) }} "
     "@:0 B@:0"
 )
 
-POSITION_TEMPLATE = Template(
+POSITION_TEMPLATE = (
     "X:{{ gcode_move.position[0] | round(2) }} "
     "Y:{{ gcode_move.position[1] | round(2) }} "
     "Z:{{ gcode_move.position[2] | round(2) }} "
     "E:{{ gcode_move.position[3] | round(2) }}"
 )
 
-FEED_RATE_TEMPLATE = Template(
+FEED_RATE_TEMPLATE = (
     "FR:{{ gcode_move.speed_factor * 100 | int }}%"
 )
-FLOW_RATE_TEMPLATE = Template(
+FLOW_RATE_TEMPLATE = (
     "E0 Flow:{{ gcode_move.extrude_factor * 100 | int }}%"
 )
 
-REPORT_SETTINGS_TEMPLATE = Template(
-    "M203 X{{ toolhead.max_velocity }} Y{{ toolhead.max_velocity }} "
-    "Z{{ configfile.settings.printer.max_z_velocity }} E{{ configfile.settings.extruder.max_extrude_only_velocity }}\n"
-    "M201 X{{ toolhead.max_accel }} Y{{ toolhead.max_accel }} "
-    "Z{{ configfile.settings.printer.max_z_accel }} E{{ configfile.settings.extruder.max_extrude_only_accel }}\n"
-    "M206 X{{ gcode_move.homing_origin[0] }} Y{{ gcode_move.homing_origin[1] }} Z{{ gcode_move.homing_origin[2] }}\n"
-    "M851 X{{ configfile.settings.bltouch.x_offset }} Y{{ configfile.settings.bltouch.y_offset }} Z{{ configfile.settings.bltouch.z_offset }}\n"
-    "M420 S1 Z{{ configfile.settings.bed_mesh.fade_end }}\n"
-    "M106 S{{ fan.speed }}"
-)
-
-PROBE_OFFSET_TEMPLATE = Template(
+PROBE_OFFSET_TEMPLATE = (
     "M851 X{{ configfile.settings.bltouch.x_offset - gcode_move.homing_origin[0] }} "
     "Y{{ configfile.settings.bltouch.y_offset - gcode_move.homing_origin[1] }} "
     "Z{{ configfile.settings.bltouch.z_offset - gcode_move.homing_origin[2] }}"
 )
 
-FIRMWARE_INFO_TEMPLATE = Template(
+REPORT_SETTINGS_TEMPLATE = (
+    "M203 X{{ toolhead.max_velocity }} Y{{ toolhead.max_velocity }} "
+    "Z{{ configfile.settings.printer.max_z_velocity }} E{{ configfile.settings.extruder.max_extrude_only_velocity }}\n"
+    "M201 X{{ toolhead.max_accel }} Y{{ toolhead.max_accel }} "
+    "Z{{ configfile.settings.printer.max_z_accel }} E{{ configfile.settings.extruder.max_extrude_only_accel }}\n"
+    "M206 X{{ gcode_move.homing_origin[0] }} Y{{ gcode_move.homing_origin[1] }} Z{{ gcode_move.homing_origin[2] }}\n"
+    f"{PROBE_OFFSET_TEMPLATE}\n"
+    "M420 S1 Z{{ configfile.settings.bed_mesh.fade_end }}\n"
+    "M106 S{{ fan.speed }}"
+)
+
+FIRMWARE_INFO_TEMPLATE = (
     "FIRMWARE_NAME:Klipper {{ mcu.mcu_version }} "
     "SOURCE_CODE_URL:https://github.com/Klipper3d/klipper "
     "PROTOCOL_VERSION:1.0 "
@@ -83,15 +83,15 @@ FIRMWARE_INFO_TEMPLATE = Template(
     "Cap:CHAMBER_TEMPERATURE:0"
 )
 
-SOFTWARE_ENDSTOPS_TEMPLATE = Template(
+SOFTWARE_ENDSTOPS_TEMPLATE = (
     "Soft endstops: {{ state }}"
 )
 
-PROBE_TEST_TEMPLATE = Template(
+PROBE_TEST_TEMPLATE = (
     "echo:Last query: {{ probe.last_query }} Last Z result: {{ probe.last_z_result }}"
 )
 
-FILE_LIST_TEMPLATE = Template(
+FILE_LIST_TEMPLATE = (
     "Begin file list\n"
     "{% for path, details in file_list.items() %}{{ path }} {{ details.size }}\n{% endfor %}"
     "End file list"
@@ -243,8 +243,8 @@ class TFTAdapter:
         self.websocket_handler = websocket_handler
         self.gcode_queue = Queue()
         self.message_queue = websocket_handler.message_queue
-        self.auto_report_temperature = 0
-        self.auto_report_position = 0
+        self.auto_report_temperature = 3
+        self.auto_report_position = 3
         self.auto_report_print_status = 0
         self.selected_file = 0
 
@@ -310,7 +310,7 @@ class TFTAdapter:
 
         # Direct handlers
         if gcode in GCODE_TEMPLATES:
-            template = GCODE_TEMPLATES[gcode]
+            template = Template(GCODE_TEMPLATES[gcode])
             if gcode == "M211":  # Special case for software endstops
                 state = {
                     "state": "On" if self.websocket_handler.latest_values["filament_switch_sensor filament_sensor"]["enabled"] else "Off"
@@ -390,14 +390,12 @@ class TFTAdapter:
             return
 
         elif gcode == "M280":  # Servo Position
-            servo_id = int(params_dict.get('P', 0))
             position = int(params_dict.get('S', 0))
-            bltouch = True  # TODO: Use config to determine BLTouch availability
             if position == 120:  # Test
                 await self.websocket_handler.send_moonraker_request("printer.gcode.script", {"script": "QUERY_PROBE"})
-                response = f"{PROBE_TEST_TEMPLATE.render(**self.websocket_handler.latest_values)}\nok"
+                response = f"{Template(PROBE_TEST_TEMPLATE).render(**self.websocket_handler.latest_values)}\nok"
             else:
-                if bltouch:
+                if "bltouch" in self.websocket_handler.latest_values.get("configfile", {}).get("settings", {}):
                     value = {
                         10: "pin_down",
                         90: "pin_up",
@@ -424,7 +422,7 @@ class TFTAdapter:
             self.message_queue.put(response)
             return
         elif gcode == "M851":  # XYZ Probe Offset
-            response = f"{PROBE_OFFSET_TEMPLATE.render(**self.websocket_handler.latest_values)}\nok"
+            response = f"{Template(PROBE_OFFSET_TEMPLATE).render(**self.websocket_handler.latest_values)}\nok"
             self.message_queue.put(response)
             return
         elif gcode == "M500":  # Save Settings
@@ -548,13 +546,13 @@ async def main():
         tft_adapter.serial_reader(),
         tft_adapter.process_gcode_queue(),
         tft_adapter.periodic_update_report(
-            "auto_report_position", POSITION_TEMPLATE
+            "auto_report_position", Template(POSITION_TEMPLATE)
         ),
         tft_adapter.periodic_update_report(
-            "auto_report_temperature", TEMPERATURE_TEMPLATE, prefix_ok=True
+            "auto_report_temperature", Template(TEMPERATURE_TEMPLATE), prefix_ok=True
         ),
         tft_adapter.periodic_update_report(
-            "auto_report_print_status", PRINT_STATUS_TEMPLATE
+            "auto_report_print_status", Template(PRINT_STATUS_TEMPLATE)
         )
     )
 
