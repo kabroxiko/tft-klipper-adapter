@@ -243,8 +243,8 @@ class TFTAdapter:
         self.websocket_handler = websocket_handler
         self.gcode_queue = Queue()
         self.message_queue = websocket_handler.message_queue
-        self.auto_report_temperature = 3
-        self.auto_report_position = 3
+        self.auto_report_temperature = 0
+        self.auto_report_position = 0
         self.auto_report_print_status = 0
         self.selected_file = 0
 
