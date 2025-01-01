@@ -508,8 +508,18 @@ class TFTAdapter:
             self.message_queue.put("ok")
             return
         elif gcode in {"G28", "G0", "G1", "M420", "M21", "M84", "G90", "G91", "M106", "M104", "M140", "M48"}:  # Send directly to Moonraker
+            # G28: Home all axes
+            # G0: Linear move
+            # G1: Linear move
+            # M420: Enable/Disable leveling
             # M21: Initialize the SD card
+            # M84: Disable steppers
             # G90: Set to absolute positioning
+            # G91: Set to relative positioning
+            # M106: Fan on
+            # M104: Set extruder temperature
+            # M140: Set bed temperature
+            # M48: Measure Z probe repeatability
             response = await self.websocket_handler.send_moonraker_request("printer.gcode.script", {"script": request})
             self.message_queue.put(response)
             return
