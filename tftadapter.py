@@ -180,39 +180,30 @@ class WebSocketHandler:
         await websocket.send(subscription_message)
         logging.info("Subscribed to printer object updates.")
 
-    async def send_moonraker_request(self, methods, params=None, request_id=None):
-        """Send one or multiple JSON-RPC requests and return the responses."""
+    async def send_moonraker_request(self, method, params=None):
+        """Send a JSON-RPC request and return the response."""
         try:
             async with connect(self.websocket_url) as websocket:
-                if isinstance(methods, str):
-                    methods = [methods]
                 if isinstance(params, dict):
-                    params = [params] * len(methods)
+                    params = [params]
                 elif params is None:
-                    params = [{}] * len(methods)
-                elif isinstance(params, list) and len(params) != len(methods):
-                    raise ValueError("Length of params list must match length of methods list.")
+                    params = [{}]
 
-                responses = []
-                for method, param in zip(methods, params):
-                    request_id = request_id or int.from_bytes(os.urandom(2), "big")  # Generate a unique ID
-                    request = {
-                        "jsonrpc": "2.0",
-                        "method": method,
-                        "params": param,
-                        "id": request_id,
-                    }
-                    await websocket.send(json.dumps(request))
+                request_id = int.from_bytes(os.urandom(2), "big")  # Generate a unique ID
+                request = {
+                    "jsonrpc": "2.0",
+                    "method": method,
+                    "params": params[0],
+                    "id": request_id,
+                }
+                await websocket.send(json.dumps(request))
 
-                    while True:
-                        response = json.loads(await websocket.recv())
-                        if response.get("id") == request_id:
-                            responses.append(response.get("result", {}))
-                            break
-
-                return responses if len(responses) > 1 else responses[0]
+                while True:
+                    response = json.loads(await websocket.recv())
+                    if response.get("id") == request_id:
+                        return response.get("result", {})
         except Exception as e:
-            logging.error(f"JSON-RPC call error: {methods}, {e}")
+            logging.error(f"JSON-RPC call error: {method}, {e}")
             return None
 
     async def call_moonraker_script(self, scripts):
@@ -226,7 +217,7 @@ class WebSocketHandler:
                 raise ValueError("Invalid script format. Must be a string or a list of strings.")
 
             responses = await self.send_moonraker_request(
-                methods=["printer.gcode.script"] * len(scripts),
+                "printer.gcode.script",
                 params=[{"script": script} for script in scripts]
             )
 
