@@ -141,7 +141,7 @@ class SerialHandler:
 
 
 class WebSocketHandler:
-    def __init__(self, websocket_url):
+    def __init__(self, websocket_url, message_queue):
         self.websocket_url = websocket_url
         self.message_queue = message_queue
         self.latest_values = {}
