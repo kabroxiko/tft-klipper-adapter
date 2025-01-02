@@ -120,9 +120,6 @@ class SerialHandler:
         self.connection = None
 
     def initialize(self):
-        if self.connection and self.connection.is_open:
-            logging.error(f"Serial port {self.serial_port} is already connected.")
-            raise Exception(f"Serial port {self.serial_port} is already connected.")
         try:
             self.connection = serial.Serial(self.serial_port, self.baud_rate, timeout=0.1)
             logging.info(f"Connected to serial port {self.serial_port} at {self.baud_rate} baud.")
