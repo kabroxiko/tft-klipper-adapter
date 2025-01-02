@@ -259,6 +259,11 @@ class TFTAdapter:
         self.auto_report_position = 0
         self.auto_report_print_status = 0
         self.selected_file = 0
+        self.last_report_times = {
+            "temperature": 0,
+            "position": 0,
+            "print_status": 0
+        }
 
     async def serial_reader(self):
         while True:
@@ -286,20 +291,34 @@ class TFTAdapter:
                                 self.serial_handler.write(message)
             await asyncio.sleep(0.1)
 
-    async def periodic_update_report(self, auto_report_interval, template, prefix_ok=False):
+    async def periodic_report(self):
         while True:
-            interval = getattr(self, auto_report_interval, 0)
-            if interval > 0:
+            current_time = asyncio.get_event_loop().time()
+            if self.auto_report_temperature > 0 and current_time - self.last_report_times["temperature"] >= self.auto_report_temperature:
                 try:
-                    report = template.render(**self.websocket_handler.latest_values)
-                    if prefix_ok:
-                        report = f"ok {report}"
+                    report = Template(TEMPERATURE_TEMPLATE).render(**self.websocket_handler.latest_values)
+                    self.serial_handler.write(f"ok {report}")
+                except:
+                    pass
+                self.last_report_times["temperature"] = current_time
+
+            if self.auto_report_position > 0 and current_time - self.last_report_times["position"] >= self.auto_report_position:
+                try:
+                    report = Template(POSITION_TEMPLATE).render(**self.websocket_handler.latest_values)
                     self.serial_handler.write(report)
                 except:
                     pass
-                await asyncio.sleep(interval)
-            else:
-                await asyncio.sleep(1)
+                self.last_report_times["position"] = current_time
+
+            if self.auto_report_print_status > 0 and current_time - self.last_report_times["print_status"] >= self.auto_report_print_status:
+                try:
+                    report = Template(PRINT_STATUS_TEMPLATE).render(**self.websocket_handler.latest_values)
+                    self.serial_handler.write(report)
+                except:
+                    pass
+                self.last_report_times["print_status"] = current_time
+
+            await asyncio.sleep(1)
 
     async def handle_gcode(self, websocket, request):
         gcode, *parameters = request.split(maxsplit=1)
@@ -562,15 +581,7 @@ async def main():
             websocket_handler.handler(),
             tft_adapter.serial_reader(),
             tft_adapter.process_gcode_queue(websocket),
-            tft_adapter.periodic_update_report(
-                "auto_report_position", Template(POSITION_TEMPLATE)
-            ),
-            tft_adapter.periodic_update_report(
-                "auto_report_temperature", Template(TEMPERATURE_TEMPLATE), prefix_ok=True
-            ),
-            tft_adapter.periodic_update_report(
-                "auto_report_print_status", Template(PRINT_STATUS_TEMPLATE)
-            )
+            tft_adapter.periodic_report()
         )
 
 if __name__ == "__main__":
