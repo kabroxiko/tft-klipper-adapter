@@ -15,5 +15,7 @@ ExecStart=/home/pi/klippy-env/bin/python tftadapter.py -p /dev/ttyS2 -l /home/pi
 SyslogIdentifier=tft_adapter
 Restart=always
 RestartSec=15
+KillMode=control-group
+KillSignal=SIGINT
 
 # sudo ln -s /home/pi/tft-klipper-adapter/tft-klipper-adapter.service /etc/systemd/system/tft-klipper-adapter.service
