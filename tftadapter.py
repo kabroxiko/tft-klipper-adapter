@@ -141,7 +141,7 @@ class SerialHandler:
 
 
 class WebSocketHandler:
-    def __init__(self, websocket_url, message_queue):
+    def __init__(self, websocket_url):
         self.websocket_url = websocket_url
         self.message_queue = message_queue
         self.latest_values = {}
@@ -245,7 +245,7 @@ class WebSocketHandler:
     async def initialize_values(self):
         """Initialize the latest values and file list from the printer."""
         result = await self.send_moonraker_request("printer.objects.query", {"objects": TRACKED_OBJECTS})
-        logging.info(f"result: {result}")
+        logging.debug(f"result: {result}")
         self.latest_values = result.get("status")
         logging.info("Initialized latest values from printer.")
 
