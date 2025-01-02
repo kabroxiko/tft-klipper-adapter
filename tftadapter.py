@@ -120,12 +120,22 @@ class SerialHandler:
         self.connection = None
 
     def initialize(self):
+        if self.is_connected():
+            logging.error(f"Serial port {self.serial_port} is in use. Exiting.")
+            raise SystemExit(1)
         try:
             self.connection = serial.Serial(self.serial_port, self.baud_rate, timeout=0.1)
             logging.info(f"Connected to serial port {self.serial_port} at {self.baud_rate} baud.")
         except Exception as e:
             logging.error(f"Error initializing serial connection: {e}")
             raise
+
+    def is_connected(self):
+        try:
+            with serial.Serial(self.serial_port) as ser:
+                return True
+        except serial.SerialException:
+            return False
 
     def read(self):
         if self.connection.in_waiting > 0:
