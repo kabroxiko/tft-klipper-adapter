@@ -180,33 +180,32 @@ class WebSocketHandler:
         await websocket.send(subscription_message)
         logging.info("Subscribed to printer object updates.")
 
-    async def send_moonraker_request(self, method, params=None):
+    async def send_moonraker_request(self, websocket, method, params=None):
         """Send a JSON-RPC request and return the response."""
         try:
-            async with connect(self.websocket_url) as websocket:
-                if isinstance(params, dict):
-                    params = [params]
-                elif params is None:
-                    params = [{}]
+            if isinstance(params, dict):
+                params = [params]
+            elif params is None:
+                params = [{}]
 
-                responses = []
-                for param in params:
-                    request_id = int.from_bytes(os.urandom(2), "big")  # Generate a unique ID
-                    request = {
-                        "jsonrpc": "2.0",
-                        "method": method,
-                        "params": param,
-                        "id": request_id,
-                    }
-                    await websocket.send(json.dumps(request))
+            responses = []
+            for param in params:
+                request_id = int.from_bytes(os.urandom(2), "big")  # Generate a unique ID
+                request = {
+                    "jsonrpc": "2.0",
+                    "method": method,
+                    "params": param,
+                    "id": request_id,
+                }
+                await websocket.send(json.dumps(request))
 
-                    while True:
-                        response = json.loads(await websocket.recv())
-                        if response.get("id") == request_id:
-                            responses.append(response.get("result", {}))
-                            break
+                while True:
+                    response = json.loads(await websocket.recv())
+                    if response.get("id") == request_id:
+                        responses.append(response.get("result", {}))
+                        break
 
-                return responses if len(responses) > 1 else responses[0]
+            return responses if len(responses) > 1 else responses[0]
         except Exception as e:
             logging.error(f"JSON-RPC call error: {method}, {e}")
             return None
@@ -230,9 +229,9 @@ class WebSocketHandler:
             if key in self.latest_values:
                 self.latest_values[key].update(values)
 
-    async def initialize_values(self):
+    async def initialize_values(self, websocket):
         """Initialize the latest values and file list from the printer."""
-        result = await self.send_moonraker_request("printer.objects.query", {"objects": TRACKED_OBJECTS})
+        result = await self.send_moonraker_request(websocket, "printer.objects.query", {"objects": TRACKED_OBJECTS})
         logging.info(f"result: {result}")
         self.latest_values = result.get("status")
         logging.info("Initialized latest values from printer.")
@@ -256,12 +255,12 @@ class TFTAdapter:
                 self.gcode_queue.put(gcode)
             await asyncio.sleep(0.1)
 
-    async def process_gcode_queue(self):
+    async def process_gcode_queue(self, websocket):
         while True:
             if not self.gcode_queue.empty():
                 gcode = self.gcode_queue.get()
                 logging.info(f"Processing G-code: {gcode}")
-                await self.handle_gcode(gcode)
+                await self.handle_gcode(websocket, gcode)
                 while not self.message_queue.empty():
                     response = self.message_queue.get()
                     if response and response != "":
@@ -289,7 +288,7 @@ class TFTAdapter:
             else:
                 await asyncio.sleep(1)
 
-    async def handle_gcode(self, request):
+    async def handle_gcode(self, websocket, request):
         gcode, *parameters = request.split(maxsplit=1)
         parameters = parameters[0] if parameters else None
         params_dict = {
@@ -317,11 +316,11 @@ class TFTAdapter:
                 }
                 response = f"{template.render(**state)}\nok"
             elif gcode == "M20":  # List the files stored on the SD card
-                result = await self.send_moonraker_request("server.files.list", {"path": ""})
+                result = await self.send_moonraker_request(websocket, "server.files.list", {"path": ""})
                 file_list = {file["path"]: {"size": file["size"]} for file in result}
                 response = f"{template.render(file_list=file_list)}\nok"
             elif gcode in ("M220", "M221") and params_dict:
-                response = await self.websocket_handler.send_moonraker_request("printer.gcode.script", {"script": request})
+                response = await self.websocket_handler.send_moonraker_request(websocket, "printer.gcode.script", {"script": request})
             else:
                 response = f"{template.render(**self.websocket_handler.latest_values)}\nok"
             self.message_queue.put(response)
@@ -340,14 +339,14 @@ class TFTAdapter:
             return
 
         elif gcode == "G29":  # Bed Leveling (Unified)
-            response = await self.websocket_handler.send_moonraker_request(
+            response = await self.websocket_handler.send_moonraker_request(websocket,
                 "printer.gcode.script",
                 [{"script": "BED_MESH_CLEAR"}, {"script": f"BED_MESH_CALIBRATE {params_dict if params_dict else ''}"}]
             )
             self.message_queue.put(response)
             return
         elif gcode == "M112":  # Emergency Stop
-            await self.websocket_handler.send_moonraker_request("printer.gcode.script", {"script": "M112"})
+            await self.websocket_handler.send_moonraker_request(websocket, "printer.gcode.script", {"script": "M112"})
             self.message_queue.put(f"{{Error:Emergency Stop")
             return
 
@@ -362,7 +361,7 @@ class TFTAdapter:
             elif gcode == "M206" and any(key in params_dict for key in ("X", "Y", "Z", "E")):  # Set home offset
                 offsets = " ".join(f"{axis}={value}" for axis, value in params_dict.items() if axis in ("X", "Y", "Z", "E"))
                 command = f"SET_GCODE_OFFSET {offsets}"
-            response = await self.websocket_handler.send_moonraker_request("printer.gcode.script", {"script": command})
+            response = await self.websocket_handler.send_moonraker_request(websocket, "printer.gcode.script", {"script": command})
             self.message_queue.put(response)
             return
 
@@ -385,14 +384,14 @@ class TFTAdapter:
             if request == "M118 P0 A1 action:cancel":
                 self.message_queue.put("//action:cancel")
             else:
-                response = await self.websocket_handler.send_moonraker_request("printer.gcode.script", {"script": request})
+                response = await self.websocket_handler.send_moonraker_request(websocket, "printer.gcode.script", {"script": request})
                 self.message_queue.put(response)
             return
 
         elif gcode == "M280":  # Servo Position
             position = int(params_dict.get('S', 0))
             if position == 120:  # Test
-                await self.websocket_handler.send_moonraker_request("printer.gcode.script", {"script": "QUERY_PROBE"})
+                await self.websocket_handler.send_moonraker_request(websocket, "printer.gcode.script", {"script": "QUERY_PROBE"})
                 response = f"{Template(PROBE_TEST_TEMPLATE).render(**self.websocket_handler.latest_values)}\nok"
             else:
                 if "bltouch" in self.websocket_handler.latest_values.get("configfile", {}).get("settings", {}):
@@ -409,13 +408,13 @@ class TFTAdapter:
                         160: "0"
                     }.get(position)
                     command = f"SET_PIN PIN=_probe_enable VALUE={value}"
-                response = await self.websocket_handler.send_moonraker_request("printer.gcode.script", {"script": command})
+                response = await self.websocket_handler.send_moonraker_request(websocket, "printer.gcode.script", {"script": command})
             self.message_queue.put(response)
             return
 
         elif gcode == "M290":  # Babystep
             Z = params_dict.get('Z')
-            response = await self.websocket_handler.send_moonraker_request(
+            response = await self.websocket_handler.send_moonraker_request(websocket,
                 "printer.gcode.script",
                 {"script": f"SET_GCODE_OFFSET Z_ADJUST={Z}"}
             )
@@ -429,7 +428,7 @@ class TFTAdapter:
             if self.websocket_handler.latest_values.get("print_stats").get("state") in ("paused", "printing"):
                 self.message_queue.put("{{Error:Not saved - Printing")
             else:
-                response = await self.websocket_handler.send_moonraker_request(
+                response = await self.websocket_handler.send_moonraker_request(websocket,
                     "printer.gcode.script",
                     [{"script": "Z_OFFSET_APPLY_PROBE"}, {"script": "SAVE_CONFIG"}]
                 )
@@ -441,31 +440,31 @@ class TFTAdapter:
             return
         elif gcode == "M23":   # Select an SD card file for printing
             self.selected_file = parameters
-            response = await self.websocket_handler.send_moonraker_request("printer.gcode.script", {"script": request})
+            response = await self.websocket_handler.send_moonraker_request(websocket, "printer.gcode.script", {"script": request})
             self.message_queue.put(response)
             return
         elif gcode == "M24":   # Start/resume SD card print
             if self.websocket_handler.latest_values.get("print_stats").get("state") == "paused":
-                response = await self.send_moonraker_request("printer.print.resume")
+                response = await self.send_moonraker_request(websocket, "printer.print.resume")
             elif self.websocket_handler.latest_values.get("print_stats").get("state") != "printing":
                 logging.info("Starting print: {self.selected_file}")
-                await self.websocket_handler.send_moonraker_request("printer.gcode.script", {"script": 'CLEAR_PAUSE'})
-                response = await self.send_moonraker_request("printer.print.start", {"filename": self.filename})
+                await self.websocket_handler.send_moonraker_request(websocket, "printer.gcode.script", {"script": 'CLEAR_PAUSE'})
+                response = await self.send_moonraker_request(websocket, "printer.print.start", {"filename": self.filename})
             else:
                 response = "echo:SD printing already in progress"
             self.message_queue.put(response)
             return
         elif gcode == "M25":   # Pause SD card print
             if self.websocket_handler.latest_values.get("print_stats").get("state") != "printing":
-                response = await self.send_moonraker_request("printer.print.pause")
+                response = await self.send_moonraker_request(websocket, "printer.print.pause")
                 self.message_queue.put(response)
             return
         elif gcode == "M524":  # Cancel current print
-            response = await self.send_moonraker_request("printer.print.cancel")
+            response = await self.send_moonraker_request(websocket, "printer.print.cancel")
             self.message_queue.put(response)
             return
         elif gcode in {"M82"}:  # Set extruder to absolute mode
-            await self.websocket_handler.send_moonraker_request("printer.gcode.script", {"script": request})
+            await self.websocket_handler.send_moonraker_request(websocket, "printer.gcode.script", {"script": request})
             self.message_queue.put("ok")
             return
 
@@ -489,7 +488,7 @@ class TFTAdapter:
             # M104: Set extruder temperature
             # M140: Set bed temperature
             # M48: Measure Z probe repeatability
-            response = await self.websocket_handler.send_moonraker_request("printer.gcode.script", {"script": request})
+            response = await self.websocket_handler.send_moonraker_request(websocket, "printer.gcode.script", {"script": request})
             self.message_queue.put(response)
             return
 
@@ -508,7 +507,7 @@ class TFTAdapter:
             f"G1 Z{zmove} E{length} F{3*60}",  # Extrude or Retract
             "G92 E0"              # Reset Extruder
         ]
-        return await self.websocket_handler.send_moonraker_request("printer.gcode.script", [{"script": cmd} for cmd in command])
+        return await self.websocket_handler.send_moonraker_request(websocket, "printer.gcode.script", [{"script": cmd} for cmd in command])
 
     async def set_led_color(self, params_dict):
         gcode = (
@@ -519,7 +518,7 @@ class TFTAdapter:
             f"WHITE={(int(params_dict.get('W', 0)) / 255 ) * (int(params_dict.get('P', 0)) / 255 ):.3f} "
             "TRANSMIT=1 SYNC=1" # [P=<index>]
         )
-        return await self.websocket_handler.send_moonraker_request("printer.gcode.script", {"script": gcode})
+        return await self.websocket_handler.send_moonraker_request(websocket, "printer.gcode.script", {"script": gcode})
 
 async def main():
     parser = argparse.ArgumentParser(description="TFT Adapter for Moonraker and Artillery TFT.")
@@ -541,20 +540,21 @@ async def main():
 
     serial_handler.initialize()
 
-    await asyncio.gather(
-        websocket_handler.handler(),
-        tft_adapter.serial_reader(),
-        tft_adapter.process_gcode_queue(),
-        tft_adapter.periodic_update_report(
-            "auto_report_position", Template(POSITION_TEMPLATE)
-        ),
-        tft_adapter.periodic_update_report(
-            "auto_report_temperature", Template(TEMPERATURE_TEMPLATE), prefix_ok=True
-        ),
-        tft_adapter.periodic_update_report(
-            "auto_report_print_status", Template(PRINT_STATUS_TEMPLATE)
+    async with connect(args.websocket_url) as websocket:
+        await asyncio.gather(
+            websocket_handler.handler(),
+            tft_adapter.serial_reader(),
+            tft_adapter.process_gcode_queue(websocket),
+            tft_adapter.periodic_update_report(
+                "auto_report_position", Template(POSITION_TEMPLATE)
+            ),
+            tft_adapter.periodic_update_report(
+                "auto_report_temperature", Template(TEMPERATURE_TEMPLATE), prefix_ok=True
+            ),
+            tft_adapter.periodic_update_report(
+                "auto_report_print_status", Template(PRINT_STATUS_TEMPLATE)
+            )
         )
-    )
 
 if __name__ == "__main__":
     asyncio.run(main())
