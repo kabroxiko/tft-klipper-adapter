@@ -120,22 +120,15 @@ class SerialHandler:
         self.connection = None
 
     def initialize(self):
-        if self.is_connected():
-            logging.error(f"Serial port {self.serial_port} is in use. Exiting.")
-            raise SystemExit(1)
+        if self.connection and self.connection.is_open:
+            logging.error(f"Serial port {self.serial_port} is already connected.")
+            raise Exception(f"Serial port {self.serial_port} is already connected.")
         try:
             self.connection = serial.Serial(self.serial_port, self.baud_rate, timeout=0.1)
             logging.info(f"Connected to serial port {self.serial_port} at {self.baud_rate} baud.")
         except Exception as e:
             logging.error(f"Error initializing serial connection: {e}")
             raise
-
-    def is_connected(self):
-        try:
-            with serial.Serial(self.serial_port) as ser:
-                return True
-        except serial.SerialException:
-            return False
 
     def read(self):
         if self.connection.in_waiting > 0:
@@ -159,9 +152,8 @@ class WebSocketHandler:
 
     async def initialize(self):
         try:
-            async with connect(self.websocket_url) as websocket:
-                logging.info("Connected to WebSocket.")
-                await self.initialize_values()
+            logging.info("Connected to WebSocket.")
+            await self.initialize_values()
         except Exception as e:
             logging.error(f"WebSocket connection error: {e}. Retrying in {self.retry_delay} seconds...")
             await asyncio.sleep(self.retry_delay)
@@ -586,7 +578,12 @@ async def main():
     websocket_handler = WebSocketHandler(args.websocket_url, message_queue)
     tft_adapter = TFTAdapter(serial_handler, websocket_handler)
 
-    serial_handler.initialize()
+    try:
+        serial_handler.initialize()
+    except Exception as e:
+        logging.error(f"Failed to initialize serial handler: {e}")
+        return
+
     async with connect(args.websocket_url) as websocket:
         await websocket_handler.initialize()
 
