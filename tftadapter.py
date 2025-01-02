@@ -582,8 +582,6 @@ async def main():
 
     async with connect(args.websocket_url) as websocket:
         await websocket_handler.initialize()
-
-    async with connect(args.websocket_url) as websocket:
         await asyncio.gather(
             websocket_handler.handler(),
             tft_adapter.serial_reader(),
