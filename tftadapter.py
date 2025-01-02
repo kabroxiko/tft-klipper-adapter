@@ -172,11 +172,14 @@ class WebSocketHandler:
                 await asyncio.sleep(self.retry_delay)
                 self.retry_delay = min(self.retry_delay * 2, 60)  # Exponential backoff, max 60 seconds
 
-    async def listen_to_websocket(self, websocket):
+    async def listen_to_websocket(self, websocket, request_id=None):
         """Listen to WebSocket messages and process them."""
         try:
             while True:
                 message = await websocket.recv()
+                data = json.loads(message)
+                if request_id and data.get("id") == request_id:
+                    return data.get("result", {})
                 self.handle_message(message)
         except Exception as e:
             logging.error(f"Error in WebSocket listener: {e}")
@@ -211,12 +214,8 @@ class WebSocketHandler:
                     "id": request_id,
                 }
                 await websocket.send(json.dumps(request))
-
-                while True:
-                    response = json.loads(await websocket.recv())
-                    if response.get("id") == request_id:
-                        responses.append(response.get("result", {}))
-                        break
+                response = await self.listen_to_websocket(websocket, request_id)
+                responses.append(response)
 
             return responses if len(responses) > 1 else responses[0]
         except Exception as e:
@@ -488,7 +487,7 @@ class TFTAdapter:
             elif self.websocket_handler.latest_values.get("print_stats").get("state") != "printing":
                 logging.info("Starting print: {self.selected_file}")
                 await self.websocket_handler.send_moonraker_request("printer.gcode.script", {"script": 'CLEAR_PAUSE'})
-                response = await self.websocket_handler.send_moonraker_request("printer.print.start", {"filename": self.filename})
+                response = await self.websocket_handler.send_moonraker_request("printer.print.start", {"filename": self.selected_file})
             else:
                 response = "echo:SD printing already in progress"
             self.message_queue.put(response)
