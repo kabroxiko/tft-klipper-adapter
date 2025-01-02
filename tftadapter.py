@@ -145,13 +145,22 @@ class WebSocketHandler:
         self.latest_values = {}
         self.retry_delay = 1
 
+    async def initialize(self):
+        try:
+            async with connect(self.websocket_url) as websocket:
+                logging.info("Connected to WebSocket.")
+                await self.initialize_values(websocket)
+        except Exception as e:
+            logging.error(f"WebSocket connection error: {e}. Retrying in {self.retry_delay} seconds...")
+            await asyncio.sleep(self.retry_delay)
+            self.retry_delay = min(self.retry_delay * 2, 60)  # Exponential backoff, max 60 seconds
+
     async def handler(self):
         """Handle WebSocket messages and ensure reconnection."""
         while True:
             try:
                 async with connect(self.websocket_url) as websocket:
                     logging.info("Connected to WebSocket.")
-                    await self.initialize_values(websocket)
                     await self.subscribe_to_printer_objects(websocket)
                     await self.listen_to_websocket(websocket)
             except Exception as e:
@@ -207,7 +216,11 @@ class WebSocketHandler:
 
             return responses if len(responses) > 1 else responses[0]
         except Exception as e:
-            logging.error(f"JSON-RPC call error: {method}, {e}")
+            if "keepalive ping timeout" in str(e):
+                logging.error(f"WebSocket keepalive ping timeout: {e}. Reconnecting...")
+                await self.initialize()  # Reinitialize WebSocket connection
+            else:
+                logging.error(f"JSON-RPC call error: {method}, {e}")
             return None
 
     def handle_message(self, message):
@@ -329,10 +342,13 @@ class TFTAdapter:
         # Auto-report G-codes
         elif gcode == "M154":  # Enable/disable auto-reporting of position
             self.auto_report_position = int(params_dict.get("S", 0))
+            self.message_queue.put("ok")
         elif gcode == "M155":  # Enable/disable auto-reporting of temperature
             self.auto_report_temperature = int(params_dict.get("S", 0))
+            self.message_queue.put("ok")
         elif gcode == "M27":  # Enable/disable auto-report print status
             self.auto_report_print_status = int(params_dict.get("S", 0))
+            self.message_queue.put("ok")
 
         elif gcode == "M33":  # Mock response for SD card operations
             self.message_queue.put(f"{parameters}\nok")
@@ -539,6 +555,7 @@ async def main():
     tft_adapter = TFTAdapter(serial_handler, websocket_handler)
 
     serial_handler.initialize()
+    await websocket_handler.initialize()
 
     async with connect(args.websocket_url) as websocket:
         await asyncio.gather(
