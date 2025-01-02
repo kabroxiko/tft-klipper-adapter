@@ -401,7 +401,7 @@ class TFTAdapter:
             return
 
         elif gcode == "M150":  # Set LED color
-            response = await self.set_led_color(params_dict)
+            response = await self.set_led_color(websocket, params_dict)
             self.message_queue.put(response)
             return
         elif gcode in ("M701", "M702"):  # Filament load/unload
@@ -411,7 +411,7 @@ class TFTAdapter:
                 'T': params_dict.get("T", 0),
                 'Z': params_dict.get("Z", 0)
             }
-            response = await self.handle_filament(params_dict)
+            response = await self.handle_filament(websocket, params_dict)
             self.message_queue.put(response)
             return
         elif gcode == "M118":  # Display message
@@ -532,7 +532,7 @@ class TFTAdapter:
             logging.warning(f"Unknown gcode: {request}")
             return None
 
-    async def handle_filament(self, params_dict):
+    async def handle_filament(self, websocket, params_dict):
         length = params_dict.get("L")
         extruder = params_dict.get("T")
         zmove = params_dict.get("Z")
@@ -544,7 +544,7 @@ class TFTAdapter:
         ]
         return await self.websocket_handler.send_moonraker_request(websocket, "printer.gcode.script", [{"script": cmd} for cmd in command])
 
-    async def set_led_color(self, params_dict):
+    async def set_led_color(self, websocket, params_dict):
         gcode = (
             f"SET_LED LED=statusled "
             f"RED={(int(params_dict.get('R', 0)) / 255 ) * (int(params_dict.get('P', 0)) / 255 ):.3f} "
