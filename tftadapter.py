@@ -348,7 +348,7 @@ class TFTAdapter:
                 }
                 response = f"{template.render(**state)}\nok"
             elif gcode == "M20":  # List the files stored on the SD card
-                result = await self.send_moonraker_request(websocket, "server.files.list", {"path": ""})
+                result = await self.websocket_handler.send_moonraker_request(websocket, "server.files.list", {"path": ""})
                 file_list = {file["path"]: {"size": file["size"]} for file in result}
                 response = f"{template.render(file_list=file_list)}\nok"
             elif gcode in ("M220", "M221") and params_dict:
@@ -480,22 +480,22 @@ class TFTAdapter:
             return
         elif gcode == "M24":   # Start/resume SD card print
             if self.websocket_handler.latest_values.get("print_stats").get("state") == "paused":
-                response = await self.send_moonraker_request(websocket, "printer.print.resume")
+                response = await self.websocket_handler.send_moonraker_request(websocket, "printer.print.resume")
             elif self.websocket_handler.latest_values.get("print_stats").get("state") != "printing":
                 logging.info("Starting print: {self.selected_file}")
                 await self.websocket_handler.send_moonraker_request(websocket, "printer.gcode.script", {"script": 'CLEAR_PAUSE'})
-                response = await self.send_moonraker_request(websocket, "printer.print.start", {"filename": self.filename})
+                response = await self.websocket_handler.send_moonraker_request(websocket, "printer.print.start", {"filename": self.filename})
             else:
                 response = "echo:SD printing already in progress"
             self.message_queue.put(response)
             return
         elif gcode == "M25":   # Pause SD card print
             if self.websocket_handler.latest_values.get("print_stats").get("state") != "printing":
-                response = await self.send_moonraker_request(websocket, "printer.print.pause")
+                response = await self.websocket_handler.send_moonraker_request(websocket, "printer.print.pause")
                 self.message_queue.put(response)
             return
         elif gcode == "M524":  # Cancel current print
-            response = await self.send_moonraker_request(websocket, "printer.print.cancel")
+            response = await self.websocket_handler.send_moonraker_request(websocket, "printer.print.cancel")
             self.message_queue.put(response)
             return
         elif gcode in {"M82"}:  # Set extruder to absolute mode
