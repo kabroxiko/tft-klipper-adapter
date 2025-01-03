@@ -307,29 +307,21 @@ class TFTAdapter:
     async def periodic_report(self):
         while True:
             current_time = asyncio.get_event_loop().time()
-            if self.auto_report_temperature > 0 and current_time - self.last_report_times["temperature"] >= self.auto_report_temperature:
-                try:
-                    report = Template(TEMPERATURE_TEMPLATE).render(**self.websocket_handler.latest_values)
-                    self.serial_handler.write(f"ok {report}")
-                except:
-                    pass
-                self.last_report_times["temperature"] = current_time
 
-            if self.auto_report_position > 0 and current_time - self.last_report_times["position"] >= self.auto_report_position:
-                try:
-                    report = Template(POSITION_TEMPLATE).render(**self.websocket_handler.latest_values)
-                    self.serial_handler.write(report)
-                except:
-                    pass
-                self.last_report_times["position"] = current_time
+            reports = [
+                ("temperature", self.auto_report_temperature, TEMPERATURE_TEMPLATE),
+                ("position", self.auto_report_position, POSITION_TEMPLATE),
+                ("print_status", self.auto_report_print_status, PRINT_STATUS_TEMPLATE),
+            ]
 
-            if self.auto_report_print_status > 0 and current_time - self.last_report_times["print_status"] >= self.auto_report_print_status:
-                try:
-                    report = Template(PRINT_STATUS_TEMPLATE).render(**self.websocket_handler.latest_values)
-                    self.serial_handler.write(report)
-                except:
-                    pass
-                self.last_report_times["print_status"] = current_time
+            for key, interval, template in reports:
+                if interval > 0 and current_time - self.last_report_times[key] >= interval:
+                    try:
+                        report = Template(template).render(**self.websocket_handler.latest_values)
+                        self.serial_handler.write(f"ok {report}" if key == "temperature" else report)
+                    except:
+                        pass
+                    self.last_report_times[key] = current_time
 
             await asyncio.sleep(1)
 
