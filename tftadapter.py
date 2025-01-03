@@ -139,6 +139,11 @@ class SerialHandler:
         except Exception as e:
             logging.error(f"Error sending message to TFT: {e}")
 
+    def close(self):
+        if self.connection and self.connection.is_open:
+            self.connection.close()
+            logging.info(f"Closed serial port {self.serial_port}.")
+
 
 class WebSocketHandler:
     def __init__(self, websocket_url, message_queue):
@@ -584,14 +589,19 @@ async def main():
         logging.error(f"Failed to initialize serial handler: {e}")
         return
 
-    async with connect(args.websocket_url) as websocket:
-        await websocket_handler.initialize()
-        await asyncio.gather(
-            websocket_handler.handler(),
-            tft_adapter.serial_reader(),
-            tft_adapter.process_gcode_queue(),
-            tft_adapter.periodic_report()
-        )
+    try:
+        async with connect(args.websocket_url) as websocket:
+            await websocket_handler.initialize()
+            await asyncio.gather(
+                websocket_handler.handler(),
+                tft_adapter.serial_reader(),
+                tft_adapter.process_gcode_queue(),
+                tft_adapter.periodic_report()
+            )
+    except Exception as e:
+        logging.error(f"Error in main loop: {e}")
+    finally:
+        serial_handler.close()
 
 if __name__ == "__main__":
     asyncio.run(main())
