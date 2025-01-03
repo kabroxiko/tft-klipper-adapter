@@ -175,12 +175,16 @@ class WebSocketHandler:
             while True:
                 message = await websocket.recv()
                 data = json.loads(message)
-                if request_id and data.get("id") == request_id:
+                if data.get("method") == "notify_klippy_disconnected":
+                    logging.warning("Klippy disconnected. Resubscribing...")
+                    await asyncio.sleep(5)
+                    return
+                elif request_id and data.get("id") == request_id:
                     return data.get("result", {})
                 self.handle_message(message)
         except Exception as e:
             logging.error(f"Error in WebSocket listener: {e}")
-            raise  # Trigger reconnection
+            raise
 
     async def subscribe_to_printer_objects(self, websocket):
         subscription_message = json.dumps({
