@@ -152,14 +152,22 @@ class WebSocketHandler:
         self.latest_values = {}
         self.retry_delay = 1
 
-    async def initialize(self):
-        try:
-            logging.info("Connected to WebSocket.")
-            await self.initialize_values()
-        except Exception as e:
-            logging.error(f"WebSocket connection error: {e}. Retrying in {self.retry_delay} seconds...")
-            await asyncio.sleep(self.retry_delay)
-            self.retry_delay = min(self.retry_delay * 2, 60)  # Exponential backoff, max 60 seconds
+    async def initialize(self, message_queue):
+        """Initialize the latest values and file list from the printer."""
+        result = await self.send_moonraker_request("printer.objects.query", {"objects": TRACKED_OBJECTS})
+        logging.info(f"result: {result}")
+        self.latest_values = result.get("status")
+        logging.info("Initialized latest values from printer.")
+        if self.latest_values.get("print_stats", {}).get("state") == "printing":
+            message_queue.put("//action:print_start")
+
+    def update_latest_values(self, updates):
+        logging.debug(f"Update latest_values: {updates}")
+        for key, values in updates.items():
+            if key in self.latest_values:
+                self.latest_values[key].update(values)
+        if "print_stats" in updates and updates["print_stats"].get("state") == "printing":
+            self.message_queue.put("//action:print_start")
 
     async def handler(self):
         """Handle WebSocket messages and ensure reconnection."""
@@ -245,18 +253,6 @@ class WebSocketHandler:
         except Exception as e:
             logging.error(f"Error processing WebSocket message: {e}")
 
-    def update_latest_values(self, updates):
-        logging.debug(f"Update latest_values: {updates}")
-        for key, values in updates.items():
-            if key in self.latest_values:
-                self.latest_values[key].update(values)
-
-    async def initialize_values(self):
-        """Initialize the latest values and file list from the printer."""
-        result = await self.send_moonraker_request("printer.objects.query", {"objects": TRACKED_OBJECTS})
-        logging.debug(f"result: {result}")
-        self.latest_values = result.get("status")
-        logging.info("Initialized latest values from printer.")
 
 class TFTAdapter:
     def __init__(self, serial_handler, websocket_handler):
@@ -591,7 +587,7 @@ async def main():
 
     try:
         async with connect(args.websocket_url) as websocket:
-            await websocket_handler.initialize()
+            await websocket_handler.initialize(message_queue)
             await asyncio.gather(
                 websocket_handler.handler(),
                 tft_adapter.serial_reader(),
