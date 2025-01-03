@@ -166,8 +166,16 @@ class WebSocketHandler:
         for key, values in updates.items():
             if key in self.latest_values:
                 self.latest_values[key].update(values)
-        if "print_stats" in updates and updates["print_stats"].get("state") == "printing":
-            self.message_queue.put("//action:print_start")
+        if "print_stats" in updates:
+            state_actions = {
+                "printing": "//action:print_start",
+                "paused": "//action:paused",
+                "complete": "//action:print_end",
+                "cancelled": "//action:cancel",
+            }
+            state = updates["print_stats"].get("state")
+            if state in state_actions:
+                self.message_queue.put(state_actions[state])
 
     async def handler(self):
         """Handle WebSocket messages and ensure reconnection."""
