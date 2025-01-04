@@ -108,7 +108,7 @@ TRACKED_OBJECTS = {
     "virtual_sdcard": ["file_position", "file_size"],
     "print_stats": ["state"],
     "probe": ["last_query", "last_z_result"],
-    "filament_switch_sensor filament_sensor": ["enabled"]
+    "filament_switch_sensor filament_sensor": ["enabled", "filament_detected"]
 }
 
 websocket = None
@@ -155,7 +155,7 @@ class WebSocketHandler:
     async def initialize(self, message_queue):
         """Initialize the latest values and file list from the printer."""
         result = await self.send_moonraker_request("printer.objects.query", {"objects": TRACKED_OBJECTS})
-        logging.info(f"result: {result}")
+        logging.debug(f"result: {result}")
         self.latest_values = result.get("status")
         logging.info("Initialized latest values from printer.")
         if self.latest_values.get("print_stats", {}).get("state") == "printing":
@@ -166,7 +166,14 @@ class WebSocketHandler:
         for key, values in updates.items():
             if key in self.latest_values:
                 self.latest_values[key].update(values)
+        if "filament_switch_sensor filament_sensor" in updates:
+            logging.info(f"filament_detected: {updates['filament_switch_sensor filament_sensor']}")
+            if updates["filament_switch_sensor filament_sensor"].get("filament_detected"):
+                self.message_queue.put("//action:prompt_show")
+            else:
+                self.message_queue.put("//action:pause filament_runout")
         if "print_stats" in updates:
+            logging.info(f"print_stats: {updates['print_stats']}")
             state_actions = {
                 "printing": "//action:print_start",
                 "paused": "//action:paused",
@@ -421,11 +428,16 @@ class TFTAdapter:
             return
         elif gcode == "M118":  # Display message
             # TODO: Complete rest of options
-            if request == "M118 P0 A1 action:cancel":
+            if "P0 A1 action:cancel" in request:
                 self.message_queue.put("//action:cancel")
+            elif "P0 A1 action:notification remote pause" in request:
+                self.message_queue.put("//action:notification remote pause")
+            elif "P0 A1 action:notification remote resume" in request:
+                self.message_queue.put("//action:notification remote resume")
             else:
-                response = await self.websocket_handler.send_moonraker_request("printer.gcode.script", {"script": request})
-                self.message_queue.put(response)
+                # response = await self.websocket_handler.send_moonraker_request("printer.gcode.script", {"script": request})
+                # self.message_queue.put(response)
+                logging.warning(f"Unknown gcode: {request}")
             return
 
         elif gcode == "M280":  # Servo Position
