@@ -8,6 +8,7 @@ import serial
 import re
 import os
 from jinja2 import Template
+import sys  # Add this import
 
 MACHINE_TYPE = "Artillery Genius Pro"
 
@@ -204,9 +205,8 @@ class WebSocketHandler:
                 message = await websocket.recv()
                 data = json.loads(message)
                 if data.get("method") == "notify_klippy_disconnected":
-                    logging.warning("Klippy disconnected. Resubscribing...")
-                    await asyncio.sleep(5)
-                    return
+                    logging.info("Klippy disconnected. Restarting...")
+                    sys.exit(1)
                 elif request_id and data.get("id") == request_id:
                     return data.get("result", {})
                 self.handle_message(message)
@@ -249,8 +249,8 @@ class WebSocketHandler:
             return responses if len(responses) > 1 else responses[0]
         except Exception as e:
             if "keepalive ping timeout" in str(e):
-                logging.error(f"WebSocket keepalive ping timeout: {e}. Reconnecting...")
-                await self.initialize()  # Reinitialize WebSocket connection
+                logging.error(f"WebSocket keepalive ping timeout: {e}. Restarting...")
+                sys.exit(1)
             else:
                 logging.error(f"JSON-RPC call error: {method}, {e}")
             return None
@@ -507,7 +507,7 @@ class TFTAdapter:
             self.message_queue.put(response)
             return
         elif gcode == "M25":   # Pause SD card print
-            if self.websocket_handler.latest_values.get("print_stats").get("state") != "printing":
+            if self.websocket_handler.latest_values.get("print_stats").get("state") == "printing":
                 response = await self.websocket_handler.send_moonraker_request("printer.print.pause")
                 self.message_queue.put(response)
             return
