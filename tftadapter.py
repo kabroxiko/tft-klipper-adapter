@@ -496,10 +496,12 @@ class TFTAdapter:
             self.message_queue.put(response)
             return
         elif gcode == "M24":   # Start/resume SD card print
-            if self.websocket_handler.latest_values.get("print_stats").get("state") == "paused":
+            printer_state = self.websocket_handler.latest_values.get("print_stats").get("state")
+            logging.info(f"Printer status: {printer_state}")
+            if printer_state == "paused":
                 response = await self.websocket_handler.send_moonraker_request("printer.print.resume")
-            elif self.websocket_handler.latest_values.get("print_stats").get("state") != "printing":
-                logging.info("Starting print: {self.selected_file}")
+            elif printer_state != "printing":
+                logging.info(f"Starting print: {self.selected_file}")
                 await self.websocket_handler.send_moonraker_request("printer.gcode.script", {"script": 'CLEAR_PAUSE'})
                 response = await self.websocket_handler.send_moonraker_request("printer.print.start", {"filename": self.selected_file})
             else:
@@ -507,7 +509,9 @@ class TFTAdapter:
             self.message_queue.put(response)
             return
         elif gcode == "M25":   # Pause SD card print
-            if self.websocket_handler.latest_values.get("print_stats").get("state") == "printing":
+            printer_state = self.websocket_handler.latest_values.get("print_stats").get("state")
+            logging.info(f"Printer status: {printer_state}")
+            if printer_state == "printing":
                 response = await self.websocket_handler.send_moonraker_request("printer.print.pause")
                 self.message_queue.put(response)
             return
