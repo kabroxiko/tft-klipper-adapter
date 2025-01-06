@@ -98,6 +98,11 @@ FILE_LIST_TEMPLATE = (
     "End file list"
 )
 
+FILE_SELECT_TEMPLATE = (
+    "File opened:{{ filename }} Size:{{ size }}\n"
+    "File selected"
+)
+
 TRACKED_OBJECTS = {
     "extruder": ["temperature", "target"],
     "heater_bed": ["temperature", "target"],
@@ -492,7 +497,11 @@ class TFTAdapter:
             return
         elif gcode == "M23":   # Select an SD card file for printing
             self.selected_file = parameters
-            response = await self.websocket_handler.send_moonraker_request("printer.gcode.script", {"script": request})
+            result = await self.websocket_handler.send_moonraker_request(
+                "server.files.metadata", {"filename": self.selected_file.lstrip('/')}
+            )
+            file_size = result.get("size", 0)
+            response = f"{Template(FILE_SELECT_TEMPLATE).render(filename=self.selected_file, size=file_size)}\nok"
             self.message_queue.put(response)
             return
         elif gcode == "M24":   # Start/resume SD card print
