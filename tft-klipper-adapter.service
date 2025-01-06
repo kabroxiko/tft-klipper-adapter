@@ -14,7 +14,7 @@ WorkingDirectory=/home/pi/tft-klipper-adapter
 ExecStart=/home/pi/klippy-env/bin/python tftadapter.py -p /dev/ttyS2 -l /home/pi/printer_data/logs/tftadapter.log
 SyslogIdentifier=tft_adapter
 Restart=always
-RestartSec=0
+RestartSec=2s
 KillMode=control-group
 KillSignal=SIGINT
 

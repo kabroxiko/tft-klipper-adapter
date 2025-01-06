@@ -239,9 +239,10 @@ class WebSocketHandler:
                 request = {
                     "jsonrpc": "2.0",
                     "method": method,
-                    "params": param,
                     "id": request_id,
                 }
+                if param != {}:
+                    request["params"] = param
                 await websocket.send(json.dumps(request))
                 response = await self.listen_to_websocket(websocket, request_id)
                 responses.append(response)
@@ -561,13 +562,13 @@ class TFTAdapter:
         ]
         return await self.websocket_handler.send_moonraker_request("printer.gcode.script", [{"script": cmd} for cmd in command])
 
-    async def set_led_color(self, websocket, params_dict):
+    async def set_led_color(self, params):
         gcode = (
             f"SET_LED LED=statusled "
-            f"RED={(int(params_dict.get('R', 0)) / 255 ) * (int(params_dict.get('P', 0)) / 255 ):.3f} "
-            f"GREEN={(int(params_dict.get('U', 0)) / 255 ) * (int(params_dict.get('P', 0)) / 255 ):.3f} "
-            f"BLUE={(int(params_dict.get('B', 0)) / 255 ) * (int(params_dict.get('P', 0)) / 255 ):.3f} "
-            f"WHITE={(int(params_dict.get('W', 0)) / 255 ) * (int(params_dict.get('P', 0)) / 255 ):.3f} "
+            f"RED={(int(params.get('R', 0)) / 255 ) * (int(params.get('P', 0)) / 255 ):.3f} "
+            f"GREEN={(int(params.get('U', 0)) / 255 ) * (int(params.get('P', 0)) / 255 ):.3f} "
+            f"BLUE={(int(params.get('B', 0)) / 255 ) * (int(params.get('P', 0)) / 255 ):.3f} "
+            f"WHITE={(int(params.get('W', 0)) / 255 ) * (int(params.get('P', 0)) / 255 ):.3f} "
             "TRANSMIT=1 SYNC=1" # [P=<index>]
         )
         return await self.websocket_handler.send_moonraker_request("printer.gcode.script", {"script": gcode})
