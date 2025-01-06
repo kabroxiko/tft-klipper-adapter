@@ -4,11 +4,13 @@ import logging
 import argparse
 from queue import Queue
 from websockets import connect
+from websockets.exceptions import ConnectionClosed
 import serial
 import re
 import os
 from jinja2 import Template
-import sys  # Add this import
+import sys
+import itertools
 
 MACHINE_TYPE = "Artillery Genius Pro"
 
@@ -167,6 +169,14 @@ class WebSocketHandler:
         if self.latest_values.get("print_stats", {}).get("state") == "printing":
             self.message_queue.put("//action:print_start")
 
+    async def keepalive(websocket, ping_interval=30):
+        for ping in itertools.count():
+            await asyncio.sleep(ping_interval)
+            try:
+                await websocket.send(json.dumps({"ping": ping}))
+            except ConnectionClosed:
+                break
+
     def update_latest_values(self, updates):
         logging.debug(f"Update latest_values: {updates}")
         for key, values in updates.items():
@@ -207,7 +217,7 @@ class WebSocketHandler:
         """Listen to WebSocket messages and process them."""
         try:
             while True:
-                message = await websocket.recv()
+                message = await asyncio.wait_for(websocket.recv(), timeout=10)
                 data = json.loads(message)
                 if data.get("method") == "notify_klippy_disconnected":
                     logging.info("Klippy disconnected. Restarting...")
@@ -612,6 +622,7 @@ async def main():
 
     try:
         async with connect(args.websocket_url) as websocket:
+            keepalive_task = asyncio.create_task(websocket_handler.keepalive(websocket))
             await websocket_handler.initialize()
             await asyncio.gather(
                 websocket_handler.handler(),
@@ -623,6 +634,7 @@ async def main():
         logging.error(f"Error in main loop: {e}")
     finally:
         serial_handler.close()
+        keepalive_task.cancel()
 
 if __name__ == "__main__":
     asyncio.run(main())
