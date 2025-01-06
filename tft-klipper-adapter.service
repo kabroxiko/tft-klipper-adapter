@@ -17,5 +17,10 @@ Restart=always
 RestartSec=2s
 KillMode=control-group
 KillSignal=SIGINT
+ExecStartPre=+/home/pi/tft-klipper-adapter/gpio_watchdog.sh
+#ExecStartPre=+/bin/sh -c 'echo "ExecStartPre script started" | systemd-cat -t tft_adapter'
+#ExecStartPre=+/home/pi/tft-klipper-adapter/gpio_watchdog.sh
+#StandardOutput=syslog
+#StandardError=syslog
 
 # sudo ln -s /home/pi/tft-klipper-adapter/tft-klipper-adapter.service /etc/systemd/system/tft-klipper-adapter.service

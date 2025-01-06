@@ -2,3 +2,4 @@
 !*.py
 !requirements.txt
 !tft-klipper-adapter.service
+!gpio_watchdog.sh

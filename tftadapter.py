@@ -158,14 +158,14 @@ class WebSocketHandler:
         self.latest_values = {}
         self.retry_delay = 1
 
-    async def initialize(self, message_queue):
+    async def initialize(self):
         """Initialize the latest values and file list from the printer."""
         result = await self.send_moonraker_request("printer.objects.query", {"objects": TRACKED_OBJECTS})
         logging.debug(f"result: {result}")
         self.latest_values = result.get("status")
         logging.info("Initialized latest values from printer.")
         if self.latest_values.get("print_stats", {}).get("state") == "printing":
-            message_queue.put("//action:print_start")
+            self.message_queue.put("//action:print_start")
 
     def update_latest_values(self, updates):
         logging.debug(f"Update latest_values: {updates}")
@@ -612,7 +612,7 @@ async def main():
 
     try:
         async with connect(args.websocket_url) as websocket:
-            await websocket_handler.initialize(message_queue)
+            await websocket_handler.initialize()
             await asyncio.gather(
                 websocket_handler.handler(),
                 tft_adapter.serial_reader(),
