@@ -167,7 +167,7 @@ class WebSocketHandler:
         self.latest_values = result.get("status")
         logging.info("Initialized latest values from printer.")
         if self.latest_values.get("print_stats", {}).get("state") == "printing":
-            self.message_queue.put("//action:print_start")
+            self.send_to_tft(action="print_start")
 
     async def keepalive(websocket, ping_interval=30):
         for ping in itertools.count():
@@ -185,20 +185,20 @@ class WebSocketHandler:
         if "filament_switch_sensor filament_sensor" in updates:
             logging.info(f"filament_detected: {updates['filament_switch_sensor filament_sensor']}")
             if updates["filament_switch_sensor filament_sensor"].get("filament_detected"):
-                self.message_queue.put("//action:prompt_show")
+                self.send_to_tft(action="prompt_show")
             else:
-                self.message_queue.put("//action:pause filament_runout")
+                self.send_to_tft(action="pause filament_runout")
         if "print_stats" in updates:
             logging.info(f"print_stats: {updates['print_stats']}")
             state_actions = {
-                "printing": "//action:print_start",
-                "paused": "//action:paused",
-                "complete": "//action:print_end",
-                "cancelled": "//action:cancel",
+                "printing": "print_start",
+                "paused": "paused",
+                "complete": "print_end",
+                "cancelled": "cancel",
             }
             state = updates["print_stats"].get("state")
             if state in state_actions:
-                self.message_queue.put(state_actions[state])
+                self.send_to_tft(action=state)
 
     async def handler(self):
         """Handle WebSocket messages and ensure reconnection."""
@@ -300,6 +300,8 @@ class TFTAdapter:
             "position": 0,
             "print_status": 0
         }
+        self.last_minutes = 0.0
+        self.progress_supported = 0
 
     async def serial_reader(self):
         while True:
@@ -348,6 +350,22 @@ class TFTAdapter:
 
             await asyncio.sleep(1)
 
+    def send_to_tft(self, command=None, action=None, message=None, error=None):
+        if command:
+            self.message_queue.put(f'{command}')
+        elif action:
+            self.message_queue.put(f'//action:{action}')
+        elif message:
+            self.message_queue.put(f'{message}')
+        elif error:
+            self.message_queue.put(f'Error:{error}')
+
+    async def notify_timeleft(self, timeleft):
+        self.send_to_tft(action=f'notification Time Left {timeleft}')
+
+    async def notify_dataleft(self, current, max_data):
+        self.send_to_tft(action=f'notification Data Left {current}/{max_data}')
+
     async def handle_gcode(self, request):
         gcode, *parameters = request.split(maxsplit=1)
         parameters = parameters[0] if parameters else None
@@ -383,30 +401,30 @@ class TFTAdapter:
                 response = await self.websocket_handler.send_moonraker_request("printer.gcode.script", {"script": request})
             else:
                 response = f"{template.render(**self.websocket_handler.latest_values)}\nok"
-            self.message_queue.put(response)
+            self.send_to_tft(message=response)
             return
 
         # Auto-report G-codes
         elif gcode == "M154":  # Enable/disable auto-reporting of position
             self.auto_report_position = int(params_dict.get("S", 0))
-            self.message_queue.put("ok")
+            self.send_to_tft(message="ok")
         elif gcode == "M155":  # Enable/disable auto-reporting of temperature
             self.auto_report_temperature = int(params_dict.get("S", 0))
-            self.message_queue.put("ok")
+            self.send_to_tft(message="ok")
         elif gcode == "M27":  # Enable/disable auto-report print status
             self.auto_report_print_status = int(params_dict.get("S", 0))
-            self.message_queue.put("ok")
+            self.send_to_tft(message="ok")
 
         elif gcode == "G29":  # Bed Leveling (Unified)
             response = await self.websocket_handler.send_moonraker_request(
                 "printer.gcode.script",
                 [{"script": "BED_MESH_CLEAR"}, {"script": f"BED_MESH_CALIBRATE {params_dict if params_dict else ''}"}]
             )
-            self.message_queue.put(response)
+            self.send_to_tft(message=response)
             return
         elif gcode == "M112":  # Emergency Stop
             await self.websocket_handler.send_moonraker_request("printer.gcode.script", {"script": "M112"})
-            self.message_queue.put(f"{{Error:Emergency Stop")
+            self.send_to_tft(error="Emergency Stop")
             return
 
         # Special G-codes with parameter-specific behavior
@@ -421,12 +439,12 @@ class TFTAdapter:
                 offsets = " ".join(f"{axis}={value}" for axis, value in params_dict.items() if axis in ("X", "Y", "Z", "E"))
                 command = f"SET_GCODE_OFFSET {offsets}"
             response = await self.websocket_handler.send_moonraker_request("printer.gcode.script", {"script": command})
-            self.message_queue.put(response)
+            self.send_to_tft(message=response)
             return
 
         elif gcode == "M150":  # Set LED color
             response = await self.set_led_color(params_dict)
-            self.message_queue.put(response)
+            self.send_to_tft(message=response)
             return
         elif gcode in ("M701", "M702"):  # Filament load/unload
             length = 25
@@ -436,19 +454,17 @@ class TFTAdapter:
                 'Z': params_dict.get("Z", 0)
             }
             response = await self.handle_filament(params_dict)
-            self.message_queue.put(response)
+            self.send_to_tft(message=response)
             return
         elif gcode == "M118":  # Display message
             # TODO: Complete rest of options
             if "P0 A1 action:cancel" in request:
-                self.message_queue.put("//action:cancel")
+                self.send_to_tft(action="cancel")
             elif "P0 A1 action:notification remote pause" in request:
-                self.message_queue.put("//action:notification remote pause")
+                self.send_to_tft(action="notification remote pause")
             elif "P0 A1 action:notification remote resume" in request:
-                self.message_queue.put("//action:notification remote resume")
+                self.send_to_tft(action="notification remote resume")
             else:
-                # response = await self.websocket_handler.send_moonraker_request("printer.gcode.script", {"script": request})
-                # self.message_queue.put(response)
                 logging.warning(f"Unknown gcode: {request}")
             return
 
@@ -473,7 +489,7 @@ class TFTAdapter:
                     }.get(position)
                     command = f"SET_PIN PIN=_probe_enable VALUE={value}"
                 response = await self.websocket_handler.send_moonraker_request("printer.gcode.script", {"script": command})
-            self.message_queue.put(response)
+            self.send_to_tft(message=response)
             return
 
         elif gcode == "M290":  # Babystep
@@ -482,28 +498,28 @@ class TFTAdapter:
                 "printer.gcode.script",
                 {"script": f"SET_GCODE_OFFSET Z_ADJUST={Z}"}
             )
-            self.message_queue.put(response)
+            self.send_to_tft(message=response)
             return
         elif gcode == "M851":  # XYZ Probe Offset
             response = f"{Template(PROBE_OFFSET_TEMPLATE).render(**self.websocket_handler.latest_values)}\nok"
-            self.message_queue.put(response)
+            self.send_to_tft(message=response)
             return
         elif gcode == "M500":  # Save Settings
             if self.websocket_handler.latest_values.get("print_stats").get("state") in ("paused", "printing"):
-                self.message_queue.put("{{Error:Not saved - Printing")
+                self.send_to_tft(error="Not saved - Printing")
             else:
                 response = await self.websocket_handler.send_moonraker_request(
                     "printer.gcode.script",
                     [{"script": "Z_OFFSET_APPLY_PROBE"}, {"script": "SAVE_CONFIG"}]
                 )
-                self.message_queue.put(response)
+                self.send_to_tft(message=response)
             return
 
         elif gcode == "M108":  # Special empty response
-            self.message_queue.put("")
+            self.send_to_tft(message="")
             return
         elif gcode == "M33":  # Mock response for SD card operations
-            self.message_queue.put(f"{parameters}\nok")
+            self.send_to_tft(message=f"{parameters}\nok")
             return
         elif gcode == "M23":   # Select an SD card file for printing
             self.selected_file = parameters
@@ -512,7 +528,7 @@ class TFTAdapter:
             )
             file_size = result.get("size", 0)
             response = f"{Template(FILE_SELECT_TEMPLATE).render(filename=self.selected_file, size=file_size)}\nok"
-            self.message_queue.put(response)
+            self.send_to_tft(message=response)
             return
         elif gcode == "M24":   # Start/resume SD card print
             printer_state = self.websocket_handler.latest_values.get("print_stats").get("state")
@@ -525,22 +541,22 @@ class TFTAdapter:
                 response = await self.websocket_handler.send_moonraker_request("printer.print.start", {"filename": self.selected_file})
             else:
                 response = "echo:SD printing already in progress"
-            self.message_queue.put(response)
+            self.send_to_tft(message=response)
             return
         elif gcode == "M25":   # Pause SD card print
             printer_state = self.websocket_handler.latest_values.get("print_stats").get("state")
             logging.info(f"Printer status: {printer_state}")
             if printer_state == "printing":
                 response = await self.websocket_handler.send_moonraker_request("printer.print.pause")
-                self.message_queue.put(response)
+                self.send_to_tft(message=response)
             return
         elif gcode == "M524":  # Cancel current print
             response = await self.websocket_handler.send_moonraker_request("printer.print.cancel")
-            self.message_queue.put(response)
+            self.send_to_tft(message=response)
             return
         elif gcode in {"M82"}:  # Set extruder to absolute mode
             await self.websocket_handler.send_moonraker_request("printer.gcode.script", {"script": request})
-            self.message_queue.put("ok")
+            self.send_to_tft(message="ok")
             return
 
         # Commands with no action or immediate acknowledgment
@@ -548,7 +564,7 @@ class TFTAdapter:
             # M22: Release the SD card
             # M92: Set axis steps per unit
             # T0: Select tool 0
-            self.message_queue.put("ok")
+            self.send_to_tft(message="ok")
             return
         elif gcode in {"G28", "G0", "G1", "M420", "M21", "M84", "G90", "G91", "M106", "M104", "M140", "M48"}:  # Send directly to Moonraker
             # G28: Home all axes
@@ -564,7 +580,28 @@ class TFTAdapter:
             # M140: Set bed temperature
             # M48: Measure Z probe repeatability
             response = await self.websocket_handler.send_moonraker_request("printer.gcode.script", {"script": request})
-            self.message_queue.put(response)
+            self.send_to_tft(message=response)
+            return
+
+        elif gcode == "M73": # Set Print Progress
+            progress = float(params_dict.get("P", 0.0))
+            minutes = float(params_dict.get("R", 0.0))
+
+            if self.last_minutes != minutes:  # update display timeleft only if input changed
+                minutes_floor = int(minutes // 1)
+                seconds = int((minutes - minutes_floor) * 60)
+                hours = int(minutes_floor // 60)
+                minutes_rest = int(minutes_floor - hours * 60)
+
+                if "R" in params_dict:
+                    timeleft = f"{hours}h{minutes_rest}m{seconds}s"
+                    await self.notify_timeleft(timeleft)
+                    self.last_minutes = minutes
+
+            if "P" in params_dict:
+                self.progress_supported = 1
+                await self.notify_dataleft(int(progress * 100.0), 100 * 100)
+            self.send_to_tft(message="ok")
             return
 
         # Fallback for unknown commands
@@ -572,7 +609,7 @@ class TFTAdapter:
             logging.warning(f"Unknown gcode: {request}")
             return None
 
-    async def handle_filament(self, websocket, params_dict):
+    async def handle_filament(self, params_dict):
         length = params_dict.get("L")
         extruder = params_dict.get("T")
         zmove = params_dict.get("Z")
