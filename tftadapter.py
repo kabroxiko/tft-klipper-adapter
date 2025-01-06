@@ -382,10 +382,6 @@ class TFTAdapter:
             self.auto_report_print_status = int(params_dict.get("S", 0))
             self.message_queue.put("ok")
 
-        elif gcode == "M33":  # Mock response for SD card operations
-            self.message_queue.put(f"{parameters}\nok")
-            return
-
         elif gcode == "G29":  # Bed Leveling (Unified)
             response = await self.websocket_handler.send_moonraker_request(
                 "printer.gcode.script",
@@ -490,6 +486,9 @@ class TFTAdapter:
 
         elif gcode == "M108":  # Special empty response
             self.message_queue.put("")
+            return
+        elif gcode == "M33":  # Mock response for SD card operations
+            self.message_queue.put(f"{parameters}\nok")
             return
         elif gcode == "M23":   # Select an SD card file for printing
             self.selected_file = parameters
