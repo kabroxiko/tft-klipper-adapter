@@ -11,6 +11,7 @@ import time
 import errno
 import logging
 import asyncio
+from jinja2 import Template
 from collections import deque
 from ..utils import ServerError
 from ..utils import json_wrapper as jsonw
@@ -42,6 +43,12 @@ class TFTError(ServerError):
 
 
 RESTART_GCODES = ["RESTART", "FIRMWARE_RESTART"]
+
+TEMPERATURE_TEMPLATE = (
+    "T:{{ extruder.temperature | round(2) }} /{{ extruder.target | round(2) }} "
+    "B:{{ heater_bed.temperature | round(2) }} /{{ heater_bed.target | round(2) }} "
+    "@:0 B@:0"
+)
 
 class SerialConnection:
     def __init__(self,
@@ -110,6 +117,7 @@ class SerialConnection:
             return
         try:
             data = os.read(self.fd, 4096)
+            logging.info(f"data: {data}")
         except os.error:
             return
 
@@ -238,9 +246,7 @@ class TFTAdapter:
             'M20': self._run_tft_M20,
             'M30': self._run_tft_M30,
             'M36': self._run_tft_M36,
-            'M408': self._run_tft_M408,
-            'M105': self._run_tft_M105,
-            'M155': self._run_tft_M155
+            'M408': self._run_tft_M408
         }
 
         # These gcodes require special parsing or handling prior to being
@@ -252,8 +258,10 @@ class TFTAdapter:
             'M25': lambda args: "PAUSE",
             'M32': self._prepare_M32,
             'M98': self._prepare_M98,
+            'M105': self._prepare_M105,
             'M120': lambda args: "SAVE_GCODE_STATE STATE=TFT",
             'M121': lambda args: "RESTORE_GCODE_STATE STATE=TFT",
+            'M155': self._prepare_M155,
             'M290': self._prepare_M290,
             'M292': self._prepare_M292,
             'M999': lambda args: "FIRMWARE_RESTART"
@@ -348,6 +356,9 @@ class TFTAdapter:
         if self.enable_checksum:
             # Get line number
             line_index = line.find(' ')
+            if line_index == -1:
+                line_index = len(line)
+            logging.info(f"line_index: {line_index}")
             try:
                 line_no: Optional[int] = int(line[1:line_index])
             except Exception:
@@ -357,11 +368,14 @@ class TFTAdapter:
             # Verify checksum
             logging.info("line: " + line)
             cs_index = line.rfind('*')
+            logging.info(f"cs_index: {cs_index}")
             try:
                 checksum = int(line[cs_index+1:])
+                logging.info(f"checksum: {checksum}")
             except Exception:
                 # Invalid checksum, do not process
                 msg = "!! Invalid Checksum"
+                logging.info(f"line_no: {line_no}")
                 if line_no is not None:
                     msg += f" Line Number: {line_no}"
                 logging.exception("TFT: " + msg)
@@ -509,6 +523,14 @@ class TFTAdapter:
             self.confirmed_gcode = ""
             return cmd
         return ""
+
+    def _prepare_M105(self, args: List[str]) -> str:
+        report = Template(TEMPERATURE_TEMPLATE).render(**self.printer_state)
+        logging.info(f"sending: {report}")
+        self.write_response(f"{report}\nok")
+
+    def _prepare_M155(self, args: List[str]) -> str:
+        pass
 
     def _create_confirmation(self, name: str, gcode: str) -> None:
         self.mbox_sequence += 1
@@ -822,18 +844,6 @@ class TFTAdapter:
         else:
             response['err'] = 1
         self.write_response(response)
-
-    def _run_tft_M105(self,
-                           arg_r: Optional[int] = None,
-                           arg_s: int = 1
-                           ) -> None:
-        pass
-
-    def _run_tft_M155(self,
-                           arg_r: Optional[int] = None,
-                           arg_s: int = 1
-                           ) -> None:
-        pass
 
     def close(self) -> None:
         self.ser_conn.disconnect()
