@@ -1,4 +1,4 @@
-# PanelDue LCD display support
+# TFT LCD display support
 #
 # Copyright (C) 2020  Eric Callahan <arksine.code@gmail.com>
 #
@@ -37,7 +37,7 @@ if TYPE_CHECKING:
 MIN_EST_TIME = 10.
 INITIALIZE_TIMEOUT = 10.
 
-class PanelDueError(ServerError):
+class TFTError(ServerError):
     pass
 
 
@@ -46,10 +46,10 @@ RESTART_GCODES = ["RESTART", "FIRMWARE_RESTART"]
 class SerialConnection:
     def __init__(self,
                  config: ConfigHelper,
-                 paneldue: PanelDue
+                 tft: TFT
                  ) -> None:
         self.event_loop = config.get_server().get_event_loop()
-        self.paneldue = paneldue
+        self.tft = tft
         self.port: str = config.get('serial')
         self.baud = config.getint('baud', 57600)
         self.partial_input: bytes = b""
@@ -71,8 +71,8 @@ class SerialConnection:
             self.ser = None
             self.partial_input = b""
             self.send_buffer = b""
-            self.paneldue.initialized = False
-            logging.info("PanelDue Disconnected")
+            self.tft.initialized = False
+            logging.info("TFT Disconnected")
         if reconnect and not self.attempting_connect:
             self.attempting_connect = True
             self.event_loop.delay_callback(1., self.connect)
@@ -101,7 +101,7 @@ class SerialConnection:
             os.set_blocking(fd, False)
             self.event_loop.add_reader(fd, self._handle_incoming)
             self.connected = True
-            logging.info("PanelDue Connected")
+            logging.info("TFT Connected")
         self.attempting_connect = False
 
     def _handle_incoming(self) -> None:
@@ -127,11 +127,11 @@ class SerialConnection:
         for line in lines:
             try:
                 decoded_line = line.strip().decode('utf-8', 'ignore')
-                self.paneldue.process_line(decoded_line)
+                self.tft.process_line(decoded_line)
             except ServerError:
                 logging.exception(
                     f"GCode Processing Error: {decoded_line}")
-                self.paneldue.handle_gcode_response(
+                self.tft.handle_gcode_response(
                     f"!! GCode Processing Error: {decoded_line}")
             except Exception:
                 logging.exception("Error during gcode processing")
@@ -164,7 +164,7 @@ class SerialConnection:
                 return
         self.send_busy = False
 
-class PanelDue:
+class TFTAdapter:
     def __init__(self, config: ConfigHelper) -> None:
         self.server = config.get_server()
         self.event_loop = self.server.get_event_loop()
@@ -215,7 +215,7 @@ class PanelDue:
         self.available_macros.update(self.confirmed_macros)
         self.non_trivial_keys = config.getlist('non_trivial_keys', ["Klipper state"])
         self.ser_conn = SerialConnection(config, self)
-        logging.info("PanelDue Configured")
+        logging.info("TFT Configured")
 
         # Register server events
         self.server.register_event_handler(
@@ -230,15 +230,17 @@ class PanelDue:
         self.server.register_event_handler(
             "server:gcode_response", self.handle_gcode_response
         )
-        self.server.register_remote_method("paneldue_beep", self.paneldue_beep)
+        self.server.register_remote_method("tft_beep", self.tft_beep)
 
         # These commands are directly executued on the server and do not to
         # make a request to Klippy
         self.direct_gcodes: Dict[str, FlexCallback] = {
-            'M20': self._run_paneldue_M20,
-            'M30': self._run_paneldue_M30,
-            'M36': self._run_paneldue_M36,
-            'M408': self._run_paneldue_M408
+            'M20': self._run_tft_M20,
+            'M30': self._run_tft_M30,
+            'M36': self._run_tft_M36,
+            'M408': self._run_tft_M408,
+            'M105': self._run_tft_M105,
+            'M155': self._run_tft_M155
         }
 
         # These gcodes require special parsing or handling prior to being
@@ -250,8 +252,8 @@ class PanelDue:
             'M25': lambda args: "PAUSE",
             'M32': self._prepare_M32,
             'M98': self._prepare_M98,
-            'M120': lambda args: "SAVE_GCODE_STATE STATE=PANELDUE",
-            'M121': lambda args: "RESTORE_GCODE_STATE STATE=PANELDUE",
+            'M120': lambda args: "SAVE_GCODE_STATE STATE=TFT",
+            'M121': lambda args: "RESTORE_GCODE_STATE STATE=TFT",
             'M290': self._prepare_M290,
             'M292': self._prepare_M292,
             'M999': lambda args: "FIRMWARE_RESTART"
@@ -270,7 +272,7 @@ class PanelDue:
                 printer_info = await self.klippy_apis.get_klippy_info()
                 cfg_status = await self.klippy_apis.query_objects({'configfile': None})
             except self.server.error:
-                logging.exception("PanelDue initialization request failed")
+                logging.exception("TFT initialization request failed")
                 retries -= 1
                 if not retries:
                     raise
@@ -284,7 +286,7 @@ class PanelDue:
         self.kinematics = printer_cfg.get('kinematics', "none")
 
         logging.info(
-            f"PanelDue Config Received:\n"
+            f"TFT Config Received:\n"
             f"Firmware Name: {self.firmware_name}\n"
             f"Kinematics: {self.kinematics}\n"
             f"Printer Config: {config}\n")
@@ -299,7 +301,7 @@ class PanelDue:
             "display_status": None,
             "print_stats": None,
             "idle_timeout": None,
-            "gcode_macro PANELDUE_BEEP": None
+            "gcode_macro TFT_BEEP": None
         }
         self.extruder_count = 0
         self.heaters = []
@@ -331,7 +333,7 @@ class PanelDue:
         self.is_ready = False
         self.is_shutdown = self.is_shutdown = False
 
-    def paneldue_beep(self, frequency: int, duration: float) -> None:
+    def tft_beep(self, frequency: int, duration: float) -> None:
         duration = int(duration * 1000.)
         self.write_response(
             {'beep_freq': frequency, 'beep_length': duration})
@@ -353,6 +355,7 @@ class PanelDue:
                 line_no = None
 
             # Verify checksum
+            logging.info("line: " + line)
             cs_index = line.rfind('*')
             try:
                 checksum = int(line[cs_index+1:])
@@ -361,8 +364,8 @@ class PanelDue:
                 msg = "!! Invalid Checksum"
                 if line_no is not None:
                     msg += f" Line Number: {line_no}"
-                logging.exception("PanelDue: " + msg)
-                raise PanelDueError(msg)
+                logging.exception("TFT: " + msg)
+                raise TFTError(msg)
 
             # Checksum is calculated by XORing every byte in the line other
             # than the checksum itself
@@ -373,8 +376,8 @@ class PanelDue:
                 msg = "!! Invalid Checksum"
                 if line_no is not None:
                     msg += f" Line Number: {line_no}"
-                logging.info("PanelDue: " + msg)
-                raise PanelDueError(msg)
+                logging.info("TFT: " + msg)
+                raise TFTError(msg)
 
             script = line[line_index+1:cs_index]
         else:
@@ -399,7 +402,7 @@ class PanelDue:
                     val = int(p[1:].strip()) if arg in "sr" \
                         else p[1:].strip(" \"\t\n")
                 except Exception:
-                    msg = f"paneldue: Error parsing direct gcode {script}"
+                    msg = f"tft: Error parsing direct gcode {script}"
                     self.handle_gcode_response("!! " + msg)
                     logging.exception(msg)
                     return
@@ -461,7 +464,7 @@ class PanelDue:
         if filename.startswith("0:/"):
             filename = filename[3:]
         # Remove initial "gcodes" folder.  This is necessary
-        # due to the HACK in the paneldue_M20 gcode.
+        # due to the HACK in the tft_M20 gcode.
         if filename.startswith("gcodes/"):
             filename = filename[6:]
         elif filename.startswith("/gcodes/"):
@@ -488,7 +491,7 @@ class PanelDue:
         macro = macro[name_start:]
         cmd = self.available_macros.get(macro)
         if cmd is None:
-            raise PanelDueError(f"Macro {macro} invalid")
+            raise TFTError(f"Macro {macro} invalid")
         if macro in self.confirmed_macros:
             self._create_confirmation(macro, cmd)
             cmd = ""
@@ -520,7 +523,7 @@ class PanelDue:
         mbox['msgBox.title'] = title
         mbox['msgBox.controls'] = 0
         mbox['msgBox.timeout'] = 0
-        logging.debug(f"Creating PanelDue Confirmation: {mbox}")
+        logging.debug(f"Creating TFT Confirmation: {mbox}")
         self.write_response(mbox)
 
     def handle_gcode_response(self, response: str) -> None:
@@ -540,7 +543,7 @@ class PanelDue:
         self.ser_conn.send(byte_resp)
 
     def _get_printer_status(self) -> str:
-        # PanelDue States applicable to Klipper:
+        # TFT States applicable to Klipper:
         # I = idle, P = printing from SD, S = stopped (shutdown),
         # C = starting up (not ready), A = paused, D = pausing,
         # B = busy
@@ -569,7 +572,7 @@ class PanelDue:
 
         return 'I'
 
-    def _run_paneldue_M408(self,
+    def _run_tft_M408(self,
                            arg_r: Optional[int] = None,
                            arg_s: int = 1
                            ) -> None:
@@ -705,13 +708,13 @@ class PanelDue:
         msg: str = p_state.get('display_status', {}).get('message', "")
         if msg and msg != self.last_message:
             response['message'] = msg
-            # reset the message so it only shows once.  The paneldue
+            # reset the message so it only shows once.  The tft
             # is strange about this, and displays it as a full screen
             # notification
         self.last_message = msg
         self.write_response(response)
 
-    def _run_paneldue_M20(self, arg_p: str, arg_s: int = 0) -> None:
+    def _run_tft_M20(self, arg_p: str, arg_s: int = 0) -> None:
         response_type = arg_s
         if response_type != 2:
             logging.info(
@@ -733,7 +736,7 @@ class PanelDue:
         if path == "/macros":
             response['files'] = list(self.available_macros.keys())
         else:
-            # HACK: The PanelDue has a bug where it does not correctly detect
+            # HACK: The TFT has a bug where it does not correctly detect
             # subdirectories if we return the root as "/".  Moonraker can
             # support a "gcodes" directory, however we must choose between this
             # support or disabling RRF specific gcodes (this is done by
@@ -751,7 +754,7 @@ class PanelDue:
                 response['files'] = flist
         self.write_response(response)
 
-    async def _run_paneldue_M30(self, arg_p: str = "") -> None:
+    async def _run_tft_M30(self, arg_p: str = "") -> None:
         # Delete a file.  Clean up the file name and make sure
         # it is relative to the "gcodes" root.
         path = arg_p
@@ -765,13 +768,13 @@ class PanelDue:
             path = "gcodes/" + path
         await self.file_manager.delete_file(path)
 
-    def _run_paneldue_M36(self, arg_p: Optional[str] = None) -> None:
+    def _run_tft_M36(self, arg_p: Optional[str] = None) -> None:
         response: Dict[str, Any] = {}
         filename: Optional[str] = arg_p
         sd_status = self.printer_state.get('virtual_sdcard', {})
         print_stats = self.printer_state.get('print_stats', {})
         if filename is None:
-            # PanelDue is requesting file information on a
+            # TFT is requesting file information on a
             # currently printed file
             active = False
             if sd_status and print_stats:
@@ -787,7 +790,7 @@ class PanelDue:
 
         # For consistency make sure that the filename begins with the
         # "gcodes/" root.  The M20 HACK should add this in some cases.
-        # Ideally we would add support to the PanelDue firmware that
+        # Ideally we would add support to the TFT firmware that
         # indicates Moonraker supports a "gcodes" directory.
         if filename[0] == "/":
             filename = filename[1:]
@@ -799,7 +802,7 @@ class PanelDue:
         if metadata:
             response['err'] = 0
             response['size'] = metadata['size']
-            # workaround for PanelDue replacing the first "T" found
+            # workaround for TFT replacing the first "T" found
             response['lastModified'] = "T" + time.ctime(metadata['modified'])
             slicer: Optional[str] = metadata.get('slicer')
             if slicer is not None:
@@ -820,12 +823,24 @@ class PanelDue:
             response['err'] = 1
         self.write_response(response)
 
+    def _run_tft_M105(self,
+                           arg_r: Optional[int] = None,
+                           arg_s: int = 1
+                           ) -> None:
+        pass
+
+    def _run_tft_M155(self,
+                           arg_r: Optional[int] = None,
+                           arg_s: int = 1
+                           ) -> None:
+        pass
+
     def close(self) -> None:
         self.ser_conn.disconnect()
-        msg = "\nPanelDue GCode Dump:"
+        msg = "\nTFT GCode Dump:"
         for i, gc in enumerate(self.debug_queue):
             msg += f"\nSequence {i}: {gc}"
         logging.debug(msg)
 
-def load_component(config: ConfigHelper) -> PanelDue:
-    return PanelDue(config)
+def load_component(config: ConfigHelper) -> TFT:
+    return TFTAdapter(config)
