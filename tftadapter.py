@@ -113,6 +113,11 @@ FLOW_RATE_TEMPLATE = (
     "E0 Flow:{{ gcode_move.extrude_factor * 100 | int }}%"
 )
 
+FILE_LIST_TEMPLATE = (
+    "Begin file list\n"
+    "{% for file, size in files %}{{ file }} {{ size }}\n{% endfor %}"
+    "End file list\nok"
+)
 
 class SerialConnection:
     def __init__(self,
@@ -293,7 +298,7 @@ class TFTAdapter:
             'M154': self._run_tft_M154,
             'M155': self._run_tft_M155,
             'M211': self._run_tft_M211,
-            'M220': self._run_tft_M20,
+            'M220': self._run_tft_M220,
             'M221': self._run_tft_M221,
             'M408': self._run_tft_M408,
             'M503': self._run_tft_M503
@@ -811,7 +816,7 @@ class TFTAdapter:
         self.last_message = msg
         self.write_response(response)
 
-    def _run_tft_M20(self, arg_p: str, arg_s: int = 0) -> None:
+    def _run_tft_M20(self, arg_p: Optional[str] = "/", arg_s: Optional[str] = 2) -> None:
         response_type = arg_s
         if response_type != 2:
             logging.info(
@@ -831,7 +836,7 @@ class TFTAdapter:
         response['files'] = []
 
         if path == "/macros":
-            response['files'] = list(self.available_macros.keys())
+            response['files'] = [(macro, 0) for macro in self.available_macros.keys()]
         else:
             # HACK: The TFT has a bug where it does not correctly detect
             # subdirectories if we return the root as "/".  Moonraker can
@@ -846,10 +851,12 @@ class TFTAdapter:
             elif path.startswith("/gcodes"):
                 path = path[1:]
 
-            flist = self.file_manager.list_dir(path, simple_format=True)
+            flist = self.file_manager.list_dir(path, simple_format=False)
             if flist:
-                response['files'] = flist
-        self.write_response(response)
+                response['files'] = [(file['filename'], file['size']) for file in flist.get("files")]
+
+        marlin_response = Template(FILE_LIST_TEMPLATE).render(files=response['files'])
+        self.write_response(marlin_response)
 
     async def _run_tft_M30(self, arg_p: str = "") -> None:
         # Delete a file.  Clean up the file name and make sure
