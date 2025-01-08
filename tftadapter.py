@@ -208,7 +208,6 @@ class SerialConnection:
                 logging.exception("Error during gcode processing")
 
     def send(self, data: bytes) -> None:
-        logging.info(data)
         self.ser.write(data)
 
 class TFTAdapter:
@@ -603,6 +602,8 @@ class TFTAdapter:
                     return
 
     def write_response(self, response: Dict[str, Any]) -> None:
+        message = response.replace('\n', '\\n')
+        logging.info(f"response: {message}")
         byte_resp = (response + "\n").encode("utf-8")
         self.ser_conn.send(byte_resp)
 
@@ -889,21 +890,15 @@ class TFTAdapter:
 
     def _run_tft_M105(self) -> str:
         report = Template(TEMPERATURE_TEMPLATE).render(**self.printer_state)
-        logging.info(f"sending: {report}")
-        self.write_response(report)
-        self.write_response("ok")
+        self.write_response(f"{report}\nok")
 
     def _run_tft_M114(self) -> str:
         report = Template(POSITION_TEMPLATE).render(**self.printer_state)
-        logging.info(f"sending: {report}")
-        self.write_response(report)
-        self.write_response("ok")
+        self.write_response(f"{report}\nok")
 
     def _run_tft_M115(self) -> str:
         report = Template(FIRMWARE_INFO_TEMPLATE).render(**self.printer_state)
-        logging.info(f"sending: {report}")
-        self.write_response(report)
-        self.write_response("ok")
+        self.write_response(f"{report}\nok")
 
     def _run_tft_M155(self, arg_s: int) -> str:
         self.write_response("ok")
@@ -914,20 +909,15 @@ class TFTAdapter:
             "state": "On"
         }
         report = f"{Template(SOFTWARE_ENDSTOPS_TEMPLATE).render(**state)}"
-        self.write_response(report)
-        self.write_response("ok")
+        self.write_response(f"{report}\nok")
 
     def _run_tft_M220(self) -> str:
         report = Template(FEED_RATE_TEMPLATE).render(**self.printer_state)
-        logging.info(f"sending: {report}")
-        self.write_response(report)
-        self.write_response("ok")
+        self.write_response(f"{report}\nok")
 
     def _run_tft_M221(self) -> str:
         report = Template(FLOW_RATE_TEMPLATE).render(**self.printer_state)
-        logging.info(f"sending: {report}")
-        self.write_response(report)
-        self.write_response("ok")
+        self.write_response(f"{report}\nok")
 
     def _run_tft_M503(self, arg_s: int) -> str:
         report = Template(REPORT_SETTINGS_TEMPLATE).render(
@@ -938,11 +928,9 @@ class TFTAdapter:
                 {"bed_mesh": self.bed_mesh}
             )
         )
-        logging.info(f"sending: {report}")
-        self.write_response(report)
-        self.write_response("ok")
+        self.write_response(f"{report}\nok")
 
-    def _run_tft_ok(self) -> str:
+    def _run_tft_ok(self, arg_p: Optional[str] = None, arg_s: Optional[str] = None) -> str:
         self.write_response("ok")
 
     def close(self) -> None:
