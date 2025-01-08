@@ -226,6 +226,7 @@ class TFTAdapter:
         self.enable_checksum = config.getboolean('enable_checksum', True)
         self.debug_queue: Deque[str] = deque(maxlen=100)
         self.temperature_report_task: Optional[asyncio.Task] = None
+        self.position_report_task: Optional[asyncio.Task] = None
 
         # Initialize tracked state.
         kconn: KlippyConnection = self.server.lookup_component("klippy_connection")
@@ -282,19 +283,20 @@ class TFTAdapter:
         # These commands are directly executued on the server and do not to
         # make a request to Klippy
         self.direct_gcodes: Dict[str, FlexCallback] = {
-            'M92': self._run_tft_ok,
-            'M211': self._run_tft_M211,
-            'M220': self._run_tft_M220,
-            'M221': self._run_tft_M221,
-            'M114': self._run_tft_M114,
-            'M115': self._run_tft_M115,
-            'M105': self._run_tft_M105,
-            'M155': self._run_tft_M155,
-            'M503': self._run_tft_M503,
             'M20': self._run_tft_M20,
             'M30': self._run_tft_M30,
             'M36': self._run_tft_M36,
-            'M408': self._run_tft_M408
+            'M92': self._run_tft_ok,
+            'M105': self._run_tft_M105,
+            'M114': self._run_tft_M114,
+            'M115': self._run_tft_M115,
+            'M154': self._run_tft_M154,
+            'M155': self._run_tft_M155,
+            'M211': self._run_tft_M211,
+            'M220': self._run_tft_M220,
+            'M221': self._run_tft_M221,
+            'M408': self._run_tft_M408,
+            'M503': self._run_tft_M503
         }
 
         # These gcodes require special parsing or handling prior to being
@@ -644,6 +646,12 @@ class TFTAdapter:
             self.write_response(f"ok {report}")
             await asyncio.sleep(interval)
 
+    async def _report_position(self, interval: int) -> None:
+        while self.ser_conn.connected and interval > 0:
+            report = Template(POSITION_TEMPLATE).render(**self.printer_state)
+            self.write_response(f"ok {report}")
+            await asyncio.sleep(interval)
+
     def _run_tft_M408(self,
                            arg_r: Optional[int] = None,
                            arg_s: int = 1
@@ -653,7 +661,7 @@ class TFTAdapter:
         response_type = arg_s
 
         curtime = self.event_loop.get_loop_time()
-        if curtime - self.last_update_time > INITIALIZE_TIMEOUT:
+        if (curtime - self.last_update_time) > INITIALIZE_TIMEOUT:
             self.initialized = False
         self.last_update_time = curtime
 
@@ -924,6 +932,23 @@ class TFTAdapter:
         except (IndexError, ValueError):
             self.write_response("!! Invalid M155 command")
 
+    def _run_tft_M154(self, arg_s: int) -> None:
+        try:
+            interval = arg_s
+            if interval > 0:
+                if self.position_report_task:
+                    self.position_report_task.cancel()
+                self.position_report_task = self.event_loop.create_task(
+                    self._report_position(interval)
+                )
+            else:
+                if self.position_report_task:
+                    self.position_report_task.cancel()
+                    self.position_report_task = None
+                self.write_response("ok")
+        except (IndexError, ValueError):
+            self.write_response("!! Invalid M154 command")
+
     def _run_tft_M211(self) -> str:
         state = {
             #"state": "On" if self.websocket_handler.latest_values["filament_switch_sensor filament_sensor"]["enabled"] else "Off"
@@ -958,6 +983,8 @@ class TFTAdapter:
         self.ser_conn.disconnect()
         if self.temperature_report_task:
             self.temperature_report_task.cancel()
+        if self.position_report_task:
+            self.position_report_task.cancel()
         msg = "\nTFT GCode Dump:"
         for i, gc in enumerate(self.debug_queue):
             msg += f"\nSequence {i}: {gc}"
