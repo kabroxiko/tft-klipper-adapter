@@ -282,6 +282,15 @@ class TFTAdapter:
         # These commands are directly executued on the server and do not to
         # make a request to Klippy
         self.direct_gcodes: Dict[str, FlexCallback] = {
+            'M92': self._run_tft_ok,
+            'M211': self._run_tft_M211,
+            'M220': self._run_tft_M220,
+            'M221': self._run_tft_M221,
+            'M114': self._run_tft_M114,
+            'M115': self._run_tft_M115,
+            'M105': self._run_tft_M105,
+            'M155': self._run_tft_M155,
+            'M503': self._run_tft_M503,
             'M20': self._run_tft_M20,
             'M30': self._run_tft_M30,
             'M36': self._run_tft_M36,
@@ -296,20 +305,11 @@ class TFTAdapter:
             'M24': lambda args: "RESUME",
             'M25': lambda args: "PAUSE",
             'M32': self._prepare_M32,
-            'M92': self._prepare_ok,
-            'M211': self._prepare_M211,
-            'M220': self._prepare_M220,
-            'M221': self._prepare_M221,
-            'M114': self._prepare_M114,
-            'M115': self._prepare_M115,
             'M98': self._prepare_M98,
-            'M105': self._prepare_M105,
             'M120': lambda args: "SAVE_GCODE_STATE STATE=TFT",
             'M121': lambda args: "RESTORE_GCODE_STATE STATE=TFT",
-            'M155': self._prepare_M155,
             'M290': self._prepare_M290,
             'M292': self._prepare_M292,
-            'M503': self._prepare_M503,
             'M999': lambda args: "FIRMWARE_RESTART"
         }
 
@@ -573,64 +573,6 @@ class TFTAdapter:
             self.confirmed_gcode = ""
             return cmd
         return ""
-
-    def _prepare_M105(self, args: List[str]) -> str:
-        report = Template(TEMPERATURE_TEMPLATE).render(**self.printer_state)
-        logging.info(f"sending: {report}")
-        self.write_response(report)
-        self.write_response("ok")
-
-    def _prepare_M114(self, args: List[str]) -> str:
-        report = Template(POSITION_TEMPLATE).render(**self.printer_state)
-        logging.info(f"sending: {report}")
-        self.write_response(report)
-        self.write_response("ok")
-
-    def _prepare_M115(self, args: List[str]) -> str:
-        report = Template(FIRMWARE_INFO_TEMPLATE).render(**self.printer_state)
-        logging.info(f"sending: {report}")
-        self.write_response(report)
-        self.write_response("ok")
-
-    def _prepare_M220(self, args: List[str]) -> str:
-        report = Template(FEED_RATE_TEMPLATE).render(**self.printer_state)
-        logging.info(f"sending: {report}")
-        self.write_response(report)
-        self.write_response("ok")
-
-    def _prepare_M221(self, args: List[str]) -> str:
-        report = Template(FLOW_RATE_TEMPLATE).render(**self.printer_state)
-        logging.info(f"sending: {report}")
-        self.write_response(report)
-        self.write_response("ok")
-
-    def _prepare_M503(self, args: List[str]) -> str:
-        report = Template(REPORT_SETTINGS_TEMPLATE).render(
-            **(
-                self.printer_state |
-                {"printer": self.printer} |
-                {"bltouch": self.bltouch} |
-                {"bed_mesh": self.bed_mesh}
-            )
-        )
-        logging.info(f"sending: {report}")
-        self.write_response(report)
-        self.write_response("ok")
-
-    def _prepare_M155(self, args: List[str]) -> str:
-        pass
-
-    def _prepare_M211(self, args: List[str]) -> str:
-        state = {
-            #"state": "On" if self.websocket_handler.latest_values["filament_switch_sensor filament_sensor"]["enabled"] else "Off"
-            "state": "On"
-        }
-        report = f"{Template(SOFTWARE_ENDSTOPS_TEMPLATE).render(**state)}"
-        self.write_response(report)
-        self.write_response("ok")
-
-    def _prepare_ok(self, args: List[str]) -> str:
-        self.write_response("ok")
 
     def _create_confirmation(self, name: str, gcode: str) -> None:
         self.mbox_sequence += 1
@@ -944,6 +886,64 @@ class TFTAdapter:
         else:
             response['err'] = 1
         self.write_response(response)
+
+    def _run_tft_M105(self) -> str:
+        report = Template(TEMPERATURE_TEMPLATE).render(**self.printer_state)
+        logging.info(f"sending: {report}")
+        self.write_response(report)
+        self.write_response("ok")
+
+    def _run_tft_M114(self) -> str:
+        report = Template(POSITION_TEMPLATE).render(**self.printer_state)
+        logging.info(f"sending: {report}")
+        self.write_response(report)
+        self.write_response("ok")
+
+    def _run_tft_M115(self) -> str:
+        report = Template(FIRMWARE_INFO_TEMPLATE).render(**self.printer_state)
+        logging.info(f"sending: {report}")
+        self.write_response(report)
+        self.write_response("ok")
+
+    def _run_tft_M155(self, arg_s: int) -> str:
+        self.write_response("ok")
+
+    def _run_tft_M211(self) -> str:
+        state = {
+            #"state": "On" if self.websocket_handler.latest_values["filament_switch_sensor filament_sensor"]["enabled"] else "Off"
+            "state": "On"
+        }
+        report = f"{Template(SOFTWARE_ENDSTOPS_TEMPLATE).render(**state)}"
+        self.write_response(report)
+        self.write_response("ok")
+
+    def _run_tft_M220(self) -> str:
+        report = Template(FEED_RATE_TEMPLATE).render(**self.printer_state)
+        logging.info(f"sending: {report}")
+        self.write_response(report)
+        self.write_response("ok")
+
+    def _run_tft_M221(self) -> str:
+        report = Template(FLOW_RATE_TEMPLATE).render(**self.printer_state)
+        logging.info(f"sending: {report}")
+        self.write_response(report)
+        self.write_response("ok")
+
+    def _run_tft_M503(self, arg_s: int) -> str:
+        report = Template(REPORT_SETTINGS_TEMPLATE).render(
+            **(
+                self.printer_state |
+                {"printer": self.printer} |
+                {"bltouch": self.bltouch} |
+                {"bed_mesh": self.bed_mesh}
+            )
+        )
+        logging.info(f"sending: {report}")
+        self.write_response(report)
+        self.write_response("ok")
+
+    def _run_tft_ok(self) -> str:
+        self.write_response("ok")
 
     def close(self) -> None:
         self.ser_conn.disconnect()
