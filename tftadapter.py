@@ -50,6 +50,24 @@ TEMPERATURE_TEMPLATE = (
     "@:0 B@:0"
 )
 
+PROBE_OFFSET_TEMPLATE = (
+    "M851 X{{ bltouch.x_offset | float - gcode_move.homing_origin[0] }} "
+    "Y{{ bltouch.y_offset | float - gcode_move.homing_origin[1] }} "
+    "Z{{ bltouch.z_offset | float - gcode_move.homing_origin[2] }}"
+)
+
+REPORT_SETTINGS_TEMPLATE = (
+    "M203 X{{ toolhead.max_velocity }} Y{{ toolhead.max_velocity }} "
+    "Z{{ printer.max_z_velocity }} E{{ extruder.max_extrude_only_velocity }}\n"
+    "M201 X{{ toolhead.max_accel }} Y{{ toolhead.max_accel }} "
+    "Z{{ printer.max_z_accel }} E{{ extruder.max_extrude_only_accel }}\n"
+    "M206 X{{ gcode_move.homing_origin[0] }} Y{{ gcode_move.homing_origin[1] }} Z{{ gcode_move.homing_origin[2] }}\n"
+    f"{PROBE_OFFSET_TEMPLATE}\n"
+    "M420 S1 Z{{ bed_mesh.fade_end }}\n"
+    "M106 S{{ fan.speed }}"
+)
+
+
 class SerialConnection:
     def __init__(self,
                  config: ConfigHelper,
@@ -117,7 +135,6 @@ class SerialConnection:
             return
         try:
             data = os.read(self.fd, 4096)
-            logging.info(f"data: {data}")
         except os.error:
             return
 
@@ -264,6 +281,7 @@ class TFTAdapter:
             'M155': self._prepare_M155,
             'M290': self._prepare_M290,
             'M292': self._prepare_M292,
+            'M503': self._prepare_M503,
             'M999': lambda args: "FIRMWARE_RESTART"
         }
 
@@ -292,6 +310,9 @@ class TFTAdapter:
         config: Dict[str, Any] = cfg_status.get('configfile', {}).get('config', {})
         printer_cfg: Dict[str, Any] = config.get('printer', {})
         self.kinematics = printer_cfg.get('kinematics', "none")
+        self.printer: Dict[str, Any] = config.get('printer', {})
+        self.bltouch: Dict[str, Any] = config.get('bltouch', {})
+        self.bed_mesh: Dict[str, Any] = config.get('bed_mesh', {})
 
         logging.info(
             f"TFT Config Received:\n"
@@ -347,6 +368,7 @@ class TFTAdapter:
             {'beep_freq': frequency, 'beep_length': duration})
 
     def process_line(self, line: str) -> None:
+        logging.info(f"line: {line}")
         self.debug_queue.append(line)
         # If we find M112 in the line then skip verification
         if "M112" in line.upper():
@@ -527,7 +549,19 @@ class TFTAdapter:
     def _prepare_M105(self, args: List[str]) -> str:
         report = Template(TEMPERATURE_TEMPLATE).render(**self.printer_state)
         logging.info(f"sending: {report}")
-        self.write_response(f"{report}\nok")
+        self.write_response(f"{report}\nok\n")
+
+    def _prepare_M503(self, args: List[str]) -> str:
+        report = Template(REPORT_SETTINGS_TEMPLATE).render(
+            **(
+                self.printer_state |
+                {"printer": self.printer} |
+                {"bltouch": self.bltouch} |
+                {"bed_mesh": self.bed_mesh}
+            )
+        )
+        logging.info(f"sending: {report}")
+        self.write_response(f"{report}\nok\n")
 
     def _prepare_M155(self, args: List[str]) -> str:
         pass
