@@ -293,7 +293,7 @@ class TFTAdapter:
             'M154': self._run_tft_M154,
             'M155': self._run_tft_M155,
             'M211': self._run_tft_M211,
-            'M220': self._run_tft_M220,
+            'M220': self._run_tft_M20,
             'M221': self._run_tft_M221,
             'M408': self._run_tft_M408,
             'M503': self._run_tft_M503
