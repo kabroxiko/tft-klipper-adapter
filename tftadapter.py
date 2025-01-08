@@ -44,6 +44,8 @@ class TFTError(ServerError):
 
 RESTART_GCODES = ["RESTART", "FIRMWARE_RESTART"]
 
+MACHINE_TYPE = "Artillery Genius Pro"
+
 TEMPERATURE_TEMPLATE = (
     "T:{{ extruder.temperature | round(2) }} /{{ extruder.target | round(2) }} "
     "B:{{ heater_bed.temperature | round(2) }} /{{ heater_bed.target | round(2) }} "
@@ -65,6 +67,50 @@ REPORT_SETTINGS_TEMPLATE = (
     f"{PROBE_OFFSET_TEMPLATE}\n"
     "M420 S1 Z{{ bed_mesh.fade_end }}\n"
     "M106 S{{ fan.speed }}"
+)
+
+FIRMWARE_INFO_TEMPLATE = (
+    # "FIRMWARE_NAME:Klipper {{ mcu.mcu_version }} "
+    "FIRMWARE_NAME:Klipper"
+    "SOURCE_CODE_URL:https://github.com/Klipper3d/klipper "
+    "PROTOCOL_VERSION:1.0 "
+    f"MACHINE_TYPE:{MACHINE_TYPE}\n"
+    "Cap:EEPROM:1\n"
+    "Cap:AUTOREPORT_TEMP:1\n"
+    "Cap:AUTOREPORT_POS:1\n"
+    "Cap:AUTOLEVEL:1\n"
+    "Cap:Z_PROBE:1\n"
+    "Cap:LEVELING_DATA:0\n"
+    "Cap:SOFTWARE_POWER:0\n"
+    "Cap:TOGGLE_LIGHTS:0\n"
+    "Cap:CASE_LIGHT_BRIGHTNESS:0\n"
+    "Cap:EMERGENCY_PARSER:1\n"
+    "Cap:PROMPT_SUPPORT:0\n"
+    "Cap:SDCARD:1\n"
+    "Cap:MULTI_VOLUME:0\n"
+    "Cap:AUTOREPORT_SD_STATUS:1\n"
+    "Cap:LONG_FILENAME:1\n"
+    "Cap:BABYSTEPPING:1\n"
+    "Cap:BUILD_PERCENT:1\n"
+    "Cap:CHAMBER_TEMPERATURE:0"
+)
+
+SOFTWARE_ENDSTOPS_TEMPLATE = (
+    "Soft endstops: {{ state }}"
+)
+
+POSITION_TEMPLATE = (
+    "X:{{ gcode_move.position[0] | round(2) }} "
+    "Y:{{ gcode_move.position[1] | round(2) }} "
+    "Z:{{ gcode_move.position[2] | round(2) }} "
+    "E:{{ gcode_move.position[3] | round(2) }}"
+)
+
+FEED_RATE_TEMPLATE = (
+    "FR:{{ gcode_move.speed_factor * 100 | int }}%"
+)
+FLOW_RATE_TEMPLATE = (
+    "E0 Flow:{{ gcode_move.extrude_factor * 100 | int }}%"
 )
 
 
@@ -162,32 +208,8 @@ class SerialConnection:
                 logging.exception("Error during gcode processing")
 
     def send(self, data: bytes) -> None:
-        self.send_buffer += data
-        if not self.send_busy:
-            self.send_busy = True
-            self.event_loop.register_callback(self._do_send)
-
-    async def _do_send(self) -> None:
-        assert self.fd is not None
-        while self.send_buffer:
-            if not self.connected:
-                break
-            try:
-                sent = os.write(self.fd, self.send_buffer)
-            except os.error as e:
-                if e.errno == errno.EBADF or e.errno == errno.EPIPE:
-                    sent = 0
-                else:
-                    await asyncio.sleep(.001)
-                    continue
-            if sent:
-                self.send_buffer = self.send_buffer[sent:]
-            else:
-                logging.exception(
-                    "Error writing data, closing serial connection")
-                self.disconnect(reconnect=True)
-                return
-        self.send_busy = False
+        logging.info(data)
+        self.ser.write(data)
 
 class TFTAdapter:
     def __init__(self, config: ConfigHelper) -> None:
@@ -274,6 +296,12 @@ class TFTAdapter:
             'M24': lambda args: "RESUME",
             'M25': lambda args: "PAUSE",
             'M32': self._prepare_M32,
+            'M92': self._prepare_ok,
+            'M211': self._prepare_M211,
+            'M220': self._prepare_M220,
+            'M221': self._prepare_M221,
+            'M114': self._prepare_M114,
+            'M115': self._prepare_M115,
             'M98': self._prepare_M98,
             'M105': self._prepare_M105,
             'M120': lambda args: "SAVE_GCODE_STATE STATE=TFT",
@@ -549,7 +577,32 @@ class TFTAdapter:
     def _prepare_M105(self, args: List[str]) -> str:
         report = Template(TEMPERATURE_TEMPLATE).render(**self.printer_state)
         logging.info(f"sending: {report}")
-        self.write_response(f"{report}\nok\n")
+        self.write_response(report)
+        self.write_response("ok")
+
+    def _prepare_M114(self, args: List[str]) -> str:
+        report = Template(POSITION_TEMPLATE).render(**self.printer_state)
+        logging.info(f"sending: {report}")
+        self.write_response(report)
+        self.write_response("ok")
+
+    def _prepare_M115(self, args: List[str]) -> str:
+        report = Template(FIRMWARE_INFO_TEMPLATE).render(**self.printer_state)
+        logging.info(f"sending: {report}")
+        self.write_response(report)
+        self.write_response("ok")
+
+    def _prepare_M220(self, args: List[str]) -> str:
+        report = Template(FEED_RATE_TEMPLATE).render(**self.printer_state)
+        logging.info(f"sending: {report}")
+        self.write_response(report)
+        self.write_response("ok")
+
+    def _prepare_M221(self, args: List[str]) -> str:
+        report = Template(FLOW_RATE_TEMPLATE).render(**self.printer_state)
+        logging.info(f"sending: {report}")
+        self.write_response(report)
+        self.write_response("ok")
 
     def _prepare_M503(self, args: List[str]) -> str:
         report = Template(REPORT_SETTINGS_TEMPLATE).render(
@@ -561,10 +614,23 @@ class TFTAdapter:
             )
         )
         logging.info(f"sending: {report}")
-        self.write_response(f"{report}\nok\n")
+        self.write_response(report)
+        self.write_response("ok")
 
     def _prepare_M155(self, args: List[str]) -> str:
         pass
+
+    def _prepare_M211(self, args: List[str]) -> str:
+        state = {
+            #"state": "On" if self.websocket_handler.latest_values["filament_switch_sensor filament_sensor"]["enabled"] else "Off"
+            "state": "On"
+        }
+        report = f"{Template(SOFTWARE_ENDSTOPS_TEMPLATE).render(**state)}"
+        self.write_response(report)
+        self.write_response("ok")
+
+    def _prepare_ok(self, args: List[str]) -> str:
+        self.write_response("ok")
 
     def _create_confirmation(self, name: str, gcode: str) -> None:
         self.mbox_sequence += 1
@@ -595,7 +661,7 @@ class TFTAdapter:
                     return
 
     def write_response(self, response: Dict[str, Any]) -> None:
-        byte_resp = jsonw.dumps(response) + b"\r\n"
+        byte_resp = (response + "\n").encode("utf-8")
         self.ser_conn.send(byte_resp)
 
     def _get_printer_status(self) -> str:
