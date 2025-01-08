@@ -225,6 +225,7 @@ class TFTAdapter:
         self.file_metadata: Dict[str, Any] = {}
         self.enable_checksum = config.getboolean('enable_checksum', True)
         self.debug_queue: Deque[str] = deque(maxlen=100)
+        self.temperature_report_task: Optional[asyncio.Task] = None
 
         # Initialize tracked state.
         kconn: KlippyConnection = self.server.lookup_component("klippy_connection")
@@ -637,6 +638,12 @@ class TFTAdapter:
 
         return 'I'
 
+    async def _report_temperature(self, interval: int) -> None:
+        while self.ser_conn.connected and interval > 0:
+            report = Template(TEMPERATURE_TEMPLATE).render(**self.printer_state)
+            self.write_response(f"ok {report}")
+            await asyncio.sleep(interval)
+
     def _run_tft_M408(self,
                            arg_r: Optional[int] = None,
                            arg_s: int = 1
@@ -900,8 +907,22 @@ class TFTAdapter:
         report = Template(FIRMWARE_INFO_TEMPLATE).render(**self.printer_state)
         self.write_response(f"{report}\nok")
 
-    def _run_tft_M155(self, arg_s: int) -> str:
-        self.write_response("ok")
+    def _run_tft_M155(self, arg_s: int) -> None:
+        try:
+            interval = arg_s
+            if interval > 0:
+                if self.temperature_report_task:
+                    self.temperature_report_task.cancel()
+                self.temperature_report_task = self.event_loop.create_task(
+                    self._report_temperature(interval)
+                )
+            else:
+                if self.temperature_report_task:
+                    self.temperature_report_task.cancel()
+                    self.temperature_report_task = None
+                self.write_response("ok")
+        except (IndexError, ValueError):
+            self.write_response("!! Invalid M155 command")
 
     def _run_tft_M211(self) -> str:
         state = {
@@ -935,6 +956,8 @@ class TFTAdapter:
 
     def close(self) -> None:
         self.ser_conn.disconnect()
+        if self.temperature_report_task:
+            self.temperature_report_task.cancel()
         msg = "\nTFT GCode Dump:"
         for i, gc in enumerate(self.debug_queue):
             msg += f"\nSequence {i}: {gc}"
