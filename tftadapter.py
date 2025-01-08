@@ -309,6 +309,7 @@ class TFTAdapter:
             'M32': self._prepare_M32,
             'M98': self._prepare_M98,
             'M120': lambda args: "SAVE_GCODE_STATE STATE=TFT",
+            'M150': self._prepare_M150,
             'M121': lambda args: "RESTORE_GCODE_STATE STATE=TFT",
             'M290': self._prepare_M290,
             'M292': self._prepare_M292,
@@ -466,7 +467,7 @@ class TFTAdapter:
                 arg = p[0].lower()
                 try:
                     val = int(p[1:].strip()) if arg in "sr" \
-                        else p[1:].strip(" \"\t\n")
+                        else p[1:].trip(" \"\t\n")
                 except Exception:
                     msg = f"tft: Error parsing direct gcode {script}"
                     self.handle_gcode_response("!! " + msg)
@@ -561,6 +562,22 @@ class TFTAdapter:
         if macro in self.confirmed_macros:
             self._create_confirmation(macro, cmd)
             cmd = ""
+        return cmd
+
+    def _prepare_M150(self, params: Dict[str, int]) -> str:
+        red = int(params.get('R', 0)) / 255
+        green = int(params.get('U', 0)) / 255
+        blue = int(params.get('B', 0)) / 255
+        white = int(params.get('W', 0)) / 255
+        brightness = int(params.get('P', 255)) / 255
+        cmd = (
+            f"SET_LED LED=statusled "
+            f"RED={red * brightness:.3f} "
+            f"GREEN={green * brightness:.3f} "
+            f"BLUE={blue * brightness:.3f} "
+            f"WHITE={white * brightness:.3f} "
+            "TRANSMIT=1 SYNC=1"
+        )
         return cmd
 
     def _prepare_M290(self, args: List[str]) -> str:
