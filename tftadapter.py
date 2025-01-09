@@ -291,6 +291,7 @@ class TFTAdapter:
             'M20': self._run_tft_M20,
             'M21': self._run_tft_M21,
             'M30': self._run_tft_M30,
+            'M33': self._run_tft_M33,
             'M36': self._run_tft_M36,
             'M82': self._run_tft_ok,
             'M92': self._run_tft_ok,
@@ -931,6 +932,24 @@ class TFTAdapter:
         else:
             response['err'] = 1
         self.write_response(response)
+
+    def _run_tft_M33(self, arg_p: Optional[str] = None) -> None:
+        filename: Optional[str] = arg_p
+        if filename is None:
+            self.write_response("!! Missing filename\nok")
+            return
+
+        # Clean up the filename
+        filename = filename.strip('\"')
+        if filename.startswith("0:/"):
+            filename = filename[3:]
+        elif filename[0] == "/":
+            filename = filename[1:]
+
+        if not filename.startswith("gcodes/"):
+            filename = "gcodes/" + filename
+
+        self.write_response(f"{filename}\nok")
 
     def _run_tft_M105(self) -> str:
         report = Template(TEMPERATURE_TEMPLATE).render(**self.printer_state)
