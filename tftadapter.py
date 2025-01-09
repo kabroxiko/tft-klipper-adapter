@@ -374,6 +374,7 @@ class TFTAdapter:
             "display_status": None,
             "print_stats": None,
             "idle_timeout": None,
+            "filament_switch_sensor filament_sensor": None,
             "gcode_macro TFT_BEEP": None
         }
         self.extruder_count = 0
@@ -1015,9 +1016,9 @@ class TFTAdapter:
             self.write_response("!! Invalid M154 command")
 
     def _run_tft_M211(self) -> str:
+        filament_sensor_enabled = self.printer_state.get("filament_switch_sensor filament_sensor", {}).get("enabled", False)
         state = {
-            #"state": "On" if self.websocket_handler.latest_values["filament_switch_sensor filament_sensor"]["enabled"] else "Off"
-            "state": "On"
+            "state": "On" if filament_sensor_enabled else "Off"
         }
         report = f"{Template(SOFTWARE_ENDSTOPS_TEMPLATE).render(**state)}"
         self.write_response(f"{report}\nok")
