@@ -301,7 +301,9 @@ class TFTAdapter:
             'M82': self._run_tft_ok,
             'M92': self._run_tft_ok,
             'M105': self._run_tft_M105,
+            'M108': self._run_tft_M108,
             'M114': self._run_tft_M114,
+            'M118': self._run_tft_M118,
             'M115': self._run_tft_M115,
             'M154': self._run_tft_M154,
             'M155': self._run_tft_M155,
@@ -309,7 +311,8 @@ class TFTAdapter:
             'M220': self._run_tft_M220,
             'M221': self._run_tft_M221,
             'M408': self._run_tft_M408,
-            'M503': self._run_tft_M503
+            'M503': self._run_tft_M503,
+            'M524': self._run_tft_M524,
         }
 
         # These gcodes require special parsing or handling prior to being
@@ -660,10 +663,19 @@ class TFTAdapter:
                     self.last_gcode_response = response
                     return
 
-    def write_response(self, response: Dict[str, Any]) -> None:
-        message = response.replace('\n', '\\n')
+    def write_response(self, message=None, command=None, action=None, error=None) -> None:
+        if message:
+            msg = f'{message}'
+        elif command:
+            msg = f'{command}'
+        elif action:
+            msg = f'//action:{action}'
+        elif error:
+            msg = f'Error:{error}'
+
+        message = msg.replace('\n', '\\n')
         logging.info(f"response: {message}")
-        byte_resp = (response + "\n").encode("utf-8")
+        byte_resp = (msg + "\n").encode("utf-8")
         self.ser_conn.send(byte_resp)
 
     def _get_printer_status(self) -> str:
@@ -851,7 +863,7 @@ class TFTAdapter:
         self.write_response(response)
 
     def _run_tft_M21(self) -> str:
-        self.write_response("SD card ok\nok")
+        self.write_response(message="SD card ok\nok")
 
     def _run_tft_M20(self, arg_p: Optional[str] = None) -> None:
         response_type = 2
@@ -1057,6 +1069,23 @@ class TFTAdapter:
 
     def _run_tft_ok(self, arg_p: Optional[str] = None, arg_s: Optional[str] = None) -> str:
         self.write_response("ok")
+
+    def _run_tft_M524(self) -> str:
+        self.queue_gcode("CANCEL_PRINT")
+        self.write_response(message="ok")
+
+    def _run_tft_M108(self) -> str:
+        self.write_response(message="ok")
+
+    def _run_tft_M118(self, arg_p: Optional[str] = None) -> str:
+        if arg_p and "P0 A1 action:cancel" in arg_p:
+            self.write_response(action="cancel")
+        elif arg_p and "P0 A1 action:notification remote pause" in arg_p:
+            self.write_response(action="notification remote pause")
+        elif arg_p and "P0 A1 action:notification remote resume" in arg_p:
+            self.write_response(action="notification remote resume")
+        else:
+            self.write_response(message=f"echo:{arg_p}\nok" if arg_p else "ok")
 
     def close(self) -> None:
         self.ser_conn.disconnect()
