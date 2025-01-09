@@ -318,7 +318,7 @@ class TFTAdapter:
             'M0': lambda args: "CANCEL_PRINT",
             'M23': self._prepare_M23,
             'M24': self._prepare_M24,
-            'M25': lambda args: "PAUSE",
+            'M25': self._prepare_M25,
             'M32': self._prepare_M32,
             'M98': self._prepare_M98,
             'M120': lambda args: "SAVE_GCODE_STATE STATE=TFT",
@@ -568,7 +568,20 @@ class TFTAdapter:
     def _prepare_M24(self, args: List[str]) -> str:
         if not self.current_file:
             raise TFTError("No file selected to print")
-        return f"SDCARD_PRINT_FILE FILENAME=\"{self.current_file}\""
+        sd_state = self.printer_state.get("print_stats", {}).get("state", "standby")
+        if sd_state == "paused":
+            return "RESUME"
+        elif sd_state == "standby":
+            return f"SDCARD_PRINT_FILE FILENAME=\"{self.current_file}\""
+        else:
+            raise TFTError("Cannot start printing, printer is not in a stopped state")
+
+    def _prepare_M25(self, args: List[str]) -> str:
+        sd_state = self.printer_state.get("print_stats", {}).get("state", "standby")
+        if sd_state == "printing":
+            return "PAUSE"
+        else:
+            raise TFTError("Cannot pause, printer is not printing")
 
     def _prepare_M32(self, args: List[str]) -> str:
         filename = self._clean_filename(args[0])
