@@ -119,6 +119,11 @@ FILE_LIST_TEMPLATE = (
     "End file list\nok"
 )
 
+FILE_SELECT_TEMPLATE = (
+    "File opened:{{ filename }} Size:{{ size }}\n"
+    "File selected"
+)
+
 class SerialConnection:
     def __init__(self,
                  config: ConfigHelper,
@@ -312,7 +317,7 @@ class TFTAdapter:
         self.special_gcodes: Dict[str, Callable[[List[str]], str]] = {
             'M0': lambda args: "CANCEL_PRINT",
             'M23': self._prepare_M23,
-            'M24': lambda args: "RESUME",
+            'M24': self._prepare_M24,
             'M25': lambda args: "PAUSE",
             'M32': self._prepare_M32,
             'M98': self._prepare_M98,
@@ -552,7 +557,17 @@ class TFTAdapter:
 
     def _prepare_M23(self, args: List[str]) -> str:
         filename = self._clean_filename(args[0])
-        return f"M23 {filename}"
+        self.current_file = filename
+        file_metadata = self.file_manager.get_file_metadata(filename)
+        size = file_metadata.get('size', 0)
+        response = Template(FILE_SELECT_TEMPLATE).render(filename=filename, size=size)
+        self.write_response(f"{response}\nok")
+        return f"M23 {self.current_file}"
+
+    def _prepare_M24(self, args: List[str]) -> str:
+        if not self.current_file:
+            raise TFTError("No file selected to print")
+        return f"SDCARD_PRINT_FILE FILENAME=\"{self.current_file}\""
 
     def _prepare_M32(self, args: List[str]) -> str:
         filename = self._clean_filename(args[0])
