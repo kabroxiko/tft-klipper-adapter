@@ -322,12 +322,10 @@ class TFTAdapter:
             'M24': self._prepare_M24,
             'M25': self._prepare_M25,
             'M32': self._prepare_M32,
-            'M98': self._prepare_M98,
             'M120': lambda args: "SAVE_GCODE_STATE STATE=TFT",
             'M150': self._prepare_M150,
             'M121': lambda args: "RESTORE_GCODE_STATE STATE=TFT",
             'M290': self._prepare_M290,
-            'M292': self._prepare_M292,
             'M999': lambda args: "FIRMWARE_RESTART"
         }
 
@@ -469,7 +467,7 @@ class TFTAdapter:
         # require special handling
         parts = script.split()
         cmd = parts[0].strip()
-        if cmd in ["M23", "M30", "M32", "M36", "M37", "M98"]:
+        if cmd in ["M23", "M30", "M32", "M36", "M37"]:
             arg = script[len(cmd):].strip()
             parts = [cmd, arg]
 
@@ -591,18 +589,6 @@ class TFTAdapter:
         filename = filename.replace("\"", "\\\"")
         return f"SDCARD_PRINT_FILE FILENAME=\"{filename}\""
 
-    def _prepare_M98(self, args: List[str]) -> str:
-        macro = args[0][1:].strip(" \"\t\n")
-        name_start = macro.rfind('/') + 1
-        macro = macro[name_start:]
-        cmd = self.available_macros.get(macro)
-        if cmd is None:
-            raise TFTError(f"Macro {macro} invalid")
-        if macro in self.confirmed_macros:
-            self._create_confirmation(macro, cmd)
-            cmd = ""
-        return cmd
-
     def _prepare_M150(self, args: List[str]) -> str:
         params = {arg[0]: int(arg[1:]) for arg in args}
         red = params.get('R', 0) / 255
@@ -625,30 +611,6 @@ class TFTAdapter:
         # args should in in the format Z0.02
         offset = args[0][1:].strip()
         return f"SET_GCODE_OFFSET Z_ADJUST={offset} MOVE=1"
-
-    def _prepare_M292(self, args: List[str]) -> str:
-        p_val = int(args[0][1])
-        if p_val == 0:
-            cmd = self.confirmed_gcode
-            self.confirmed_gcode = ""
-            return cmd
-        return ""
-
-    def _create_confirmation(self, name: str, gcode: str) -> None:
-        self.mbox_sequence += 1
-        self.confirmed_gcode = gcode
-        title = "Confirmation Dialog"
-        msg = f"Please confirm your intent to run {name}."  \
-            " Press OK to continue, or CANCEL to abort."
-        mbox: Dict[str, Any] = {}
-        mbox['msgBox.mode'] = 3
-        mbox['msgBox.msg'] = msg
-        mbox['msgBox.seq'] = self.mbox_sequence
-        mbox['msgBox.title'] = title
-        mbox['msgBox.controls'] = 0
-        mbox['msgBox.timeout'] = 0
-        logging.debug(f"Creating TFT Confirmation: {mbox}")
-        self.write_response(mbox)
 
     def handle_gcode_response(self, response: str) -> None:
         # Only queue up "non-trivial" gcode responses.  At the
@@ -676,36 +638,6 @@ class TFTAdapter:
         logging.info(f"response: {message}")
         byte_resp = (msg + "\n").encode("utf-8")
         self.ser_conn.send(byte_resp)
-
-    def _get_printer_status(self) -> str:
-        # TFT States applicable to Klipper:
-        # I = idle, P = printing from SD, S = stopped (shutdown),
-        # C = starting up (not ready), A = paused, D = pausing,
-        # B = busy
-        if self.is_shutdown:
-            return 'S'
-
-        p_state = self.printer_state
-        sd_state: str
-        sd_state = p_state.get("print_stats", {}).get("state", "standby")
-        if sd_state == "printing":
-            if self.last_printer_state == 'A':
-                # Resuming
-                return 'R'
-            # Printing
-            return 'P'
-        elif sd_state == "paused":
-            p_active = (
-                p_state.get("idle_timeout", {}).get("state", 'Idle') == "Printing"
-            )
-            if p_active and self.last_printer_state != 'A':
-                # Pausing
-                return 'D'
-            else:
-                # Paused
-                return 'A'
-
-        return 'I'
 
     async def _report_temperature(self, interval: int) -> None:
         while self.ser_conn.connected and interval > 0:
