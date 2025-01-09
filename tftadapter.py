@@ -572,12 +572,13 @@ class TFTAdapter:
             cmd = ""
         return cmd
 
-    def _prepare_M150(self, params: Dict[str, int]) -> str:
-        red = int(params.get('R', 0)) / 255
-        green = int(params.get('U', 0)) / 255
-        blue = int(params.get('B', 0)) / 255
-        white = int(params.get('W', 0)) / 255
-        brightness = int(params.get('P', 255)) / 255
+    def _prepare_M150(self, args: List[str]) -> str:
+        params = {arg[0]: int(arg[1:]) for arg in args}
+        red = params.get('R', 0) / 255
+        green = params.get('U', 0) / 255
+        blue = params.get('B', 0) / 255
+        white = params.get('W', 0) / 255
+        brightness = params.get('P', 255) / 255
         cmd = (
             f"SET_LED LED=statusled "
             f"RED={red * brightness:.3f} "
@@ -586,6 +587,7 @@ class TFTAdapter:
             f"WHITE={white * brightness:.3f} "
             "TRANSMIT=1 SYNC=1"
         )
+        self.write_response("ok")
         return cmd
 
     def _prepare_M290(self, args: List[str]) -> str:
