@@ -289,8 +289,10 @@ class TFTAdapter:
         # make a request to Klippy
         self.direct_gcodes: Dict[str, FlexCallback] = {
             'M20': self._run_tft_M20,
+            'M21': self._run_tft_M21,
             'M30': self._run_tft_M30,
             'M36': self._run_tft_M36,
+            'M82': self._run_tft_ok,
             'M92': self._run_tft_ok,
             'M105': self._run_tft_M105,
             'M114': self._run_tft_M114,
@@ -816,13 +818,16 @@ class TFTAdapter:
         self.last_message = msg
         self.write_response(response)
 
-    def _run_tft_M20(self, arg_p: Optional[str] = "/", arg_s: Optional[str] = 2) -> None:
-        response_type = arg_s
+    def _run_tft_M21(self) -> str:
+        self.write_response("SD card ok\nok")
+
+    def _run_tft_M20(self, arg_p: Optional[str] = None) -> None:
+        response_type = 2
         if response_type != 2:
             logging.info(
                 f"Cannot process response type {response_type} in M20")
             return
-        path = arg_p
+        path = "/"
 
         # Strip quotes if they exist
         path = path.strip('\"')
@@ -989,7 +994,7 @@ class TFTAdapter:
         report = Template(FLOW_RATE_TEMPLATE).render(**self.printer_state)
         self.write_response(f"{report}\nok")
 
-    def _run_tft_M503(self, arg_s: int) -> str:
+    def _run_tft_M503(self, arg_s: Optional[str] = None) -> str:
         report = Template(REPORT_SETTINGS_TEMPLATE).render(
             **(
                 self.printer_state |
