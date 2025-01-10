@@ -103,6 +103,10 @@ SOFTWARE_ENDSTOPS_TEMPLATE = (
     "Soft endstops: {{ state }}"
 )
 
+PROBE_TEST_TEMPLATE = (
+    "echo:Last query: {{ probe.last_query }} Last Z result: {{ probe.last_z_result }}"
+)
+
 POSITION_TEMPLATE = (
     "X:{{ gcode_move.position[0] | round(2) }} "
     "Y:{{ gcode_move.position[1] | round(2) }} "
