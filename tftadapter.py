@@ -319,6 +319,7 @@ class TFTAdapter:
             'M211': self._run_tft_M211,
             'M220': self._run_tft_M220,
             'M221': self._run_tft_M221,
+            'M280': self._run_tft_M280,
             'M503': self._run_tft_M503,
             'M524': self._run_tft_M524
         }
@@ -335,9 +336,9 @@ class TFTAdapter:
             'M150': self._prepare_M150,
             'M121': lambda args: "RESTORE_GCODE_STATE STATE=TFT",
             'M290': self._prepare_M290,
-            'M999': lambda args: "FIRMWARE_RESTART",
             'M701': self._prepare_M701_M702,
             'M702': self._prepare_M701_M702,
+            'M999': lambda args: "FIRMWARE_RESTART",
         }
 
     async def component_init(self) -> None:
@@ -529,11 +530,35 @@ class TFTAdapter:
             return
         self.queue_gcode(script)
 
-    def queue_gcode(self, script: str) -> None:
-        self.gc_queue.append(script)
-        if not self.gq_busy:
-            self.gq_busy = True
-            self.event_loop.register_callback(self._process_gcode_queue)
+    async def _handle_probe_test(self) -> None:
+        await self.websocket_handler.send_moonraker_request("printer.gcode.script", {"script": "QUERY_PROBE"})
+        response = f"{Template(PROBE_TEST_TEMPLATE).render(**self.websocket_handler.latest_values)}\nok"
+        self.send_to_tft(message=response)
+
+    async def _handle_servo_command(self, position: int) -> None:
+        if "bltouch" in self.websocket_handler.latest_values.get("configfile", {}).get("settings", {}):
+            value = {
+                10: "pin_down",
+                90: "pin_up",
+                160: "reset"
+            }.get(position)
+            command = f"BLTOUCH_DEBUG COMMAND={value}"
+        else:
+            value = {
+                10: "1",
+                90: "0",
+                160: "0"
+            }.get(position)
+            command = f"SET_PIN PIN=_probe_enable VALUE={value}"
+        response = await self.websocket_handler.send_moonraker_request("printer.gcode.script", {"script": command})
+        self.send_to_tft(message=response)
+
+    def _run_tft_M280(self, arg_s: int) -> None:
+        position = arg_s
+        if position == 120:  # Test
+            self.event_loop.create_task(self._handle_probe_test())
+        else:
+            self.event_loop.create_task(self._handle_servo_command(position))
 
     async def _process_gcode_queue(self) -> None:
         while self.gc_queue:
@@ -831,7 +856,7 @@ class TFTAdapter:
         if filename.startswith("0:/"):
             filename = filename[3:]
         elif filename[0] == "/":
-            filename = filename[1:]
+            filename[1:]
 
         if not filename.startswith("gcodes/"):
             filename = "gcodes/" + filename
