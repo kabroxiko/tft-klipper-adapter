@@ -335,7 +335,9 @@ class TFTAdapter:
             'M150': self._prepare_M150,
             'M121': lambda args: "RESTORE_GCODE_STATE STATE=TFT",
             'M290': self._prepare_M290,
-            'M999': lambda args: "FIRMWARE_RESTART"
+            'M999': lambda args: "FIRMWARE_RESTART",
+            'M701': self._prepare_M701_M702,
+            'M702': self._prepare_M701_M702,
         }
 
     async def component_init(self) -> None:
@@ -637,6 +639,27 @@ class TFTAdapter:
         # args should in in the format Z0.02
         offset = args[0][1:].strip()
         return f"SET_GCODE_OFFSET Z_ADJUST={offset} MOVE=1"
+
+    def _prepare_M701_M702(self, args: List[str]) -> str:
+        length = 25
+        params_dict = {
+            'L': length if args[0] == "M701" else -1 * length,
+            'T': args[1] if len(args) > 1 else 0,
+            'Z': args[2] if len(args) > 2 else 0
+        }
+        return self._handle_filament(params_dict)
+
+    async def _handle_filament(self, params_dict: Dict[str, Any]) -> str:
+        length = params_dict.get("L")
+        extruder = params_dict.get("T")
+        zmove = params_dict.get("Z")
+        command = [
+            "G91",               # Relative Positioning
+            f"G92 E{extruder}",  # Reset Extruder
+            f"G1 Z{zmove} E{length} F{3*60}",  # Extrude or Retract
+            "G92 E0"              # Reset Extruder
+        ]
+        return await self.websocket_handler.send_moonraker_request("printer.gcode.script", [{"script": cmd} for cmd in command])
 
     def handle_gcode_response(self, response: str) -> None:
         # Only queue up "non-trivial" gcode responses.  At the
