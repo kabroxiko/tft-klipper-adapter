@@ -445,67 +445,25 @@ class TFTAdapter:
         self.write_response(
             {'beep_freq': frequency, 'beep_length': duration})
 
-    def process_line(self, line: str) -> None:
-        logging.info(f"line: {line}")
-        self.debug_queue.append(line)
+    def process_line(self, command: str) -> None:
+        logging.info(f"command: {command}")
+        self.debug_queue.append(command)
         # If we find M112 in the line then skip verification
-        if "M112" in line.upper():
+        if "M112" in command.upper():
             self.event_loop.register_callback(self.klippy_apis.emergency_stop)
             return
 
-        if self.enable_checksum:
-            # Get line number
-            line_index = line.find(' ')
-            if line_index == -1:
-                line_index = len(line)
-            logging.info(f"line_index: {line_index}")
-            try:
-                line_no: Optional[int] = int(line[1:line_index])
-            except Exception:
-                line_index = -1
-                line_no = None
-
-            # Verify checksum
-            logging.info("line: " + line)
-            cs_index = line.rfind('*')
-            logging.info(f"cs_index: {cs_index}")
-            try:
-                checksum = int(line[cs_index+1:])
-                logging.info(f"checksum: {checksum}")
-            except Exception:
-                # Invalid checksum, do not process
-                msg = "!! Invalid Checksum"
-                logging.info(f"line_no: {line_no}")
-                if line_no is not None:
-                    msg += f" Line Number: {line_no}"
-                logging.exception("TFT: " + msg)
-                raise TFTError(msg)
-
-            # Checksum is calculated by XORing every byte in the line other
-            # than the checksum itself
-            calculated_cs = 0
-            for c in line[:cs_index]:
-                calculated_cs ^= ord(c)
-            if calculated_cs & 0xFF != checksum:
-                msg = "!! Invalid Checksum"
-                if line_no is not None:
-                    msg += f" Line Number: {line_no}"
-                logging.info("TFT: " + msg)
-                raise TFTError(msg)
-
-            script = line[line_index+1:cs_index]
-        else:
-            script = line
+        script = command
         # Execute the gcode.  Check for special RRF gcodes that
         # require special handling
-        parts = script.split()
-        cmd = parts[0].strip()
-        if cmd in ["M23", "M30", "M32", "M36", "M37"]:
-            arg = script[len(cmd):].strip()
-            parts = [cmd, arg]
+        parts = command.split()
+        gcode = parts[0].strip()
+        if gcode in ["M23", "M30", "M32", "M36", "M37"]:
+            arg = command[len(gcode):].strip()
+            parts = [gcode, arg]
 
         # Check for commands that query state and require immediate response
-        if cmd in self.direct_gcodes:
+        if gcode in self.direct_gcodes:
             params: Dict[str, Any] = {}
             for p in parts[1:]:
                 if p[0] not in "PSR":
@@ -516,23 +474,24 @@ class TFTAdapter:
                     val = int(p[1:].strip()) if arg in "sr" \
                         else p[1:].trip(" \"\t\n")
                 except Exception:
-                    msg = f"tft: Error parsing direct gcode {script}"
+                    msg = f"tft: Error parsing direct gcode {command}"
                     self.handle_gcode_response("!! " + msg)
                     logging.exception(msg)
                     return
                 params[f"arg_{arg}"] = val
-            func = self.direct_gcodes[cmd]
+            func = self.direct_gcodes[gcode]
             self.queue_command(func, **params)
             return
 
         # Prepare GCodes that require special handling
-        if cmd in self.special_gcodes:
-            sgc_func = self.special_gcodes[cmd]
+        if gcode in self.special_gcodes:
+            sgc_func = self.special_gcodes[gcode]
             script = sgc_func(parts[1:])
 
         if not script:
             return
-        self.queue_gcode(script)
+        else:
+            logging.warning(f"Unknown command: {command}")
 
     async def _handle_probe_test(self) -> None:
         await self.websocket_handler.send_moonraker_request("printer.gcode.script", {"script": "QUERY_PROBE"})
@@ -961,7 +920,7 @@ class TFTAdapter:
         self.write_response("ok")
 
     def _run_tft_M524(self) -> str:
-        self.queue_gcode("CANCEL_PRINT")
+        self.queue_command("CANCEL_PRINT")
         self.write_response(message="ok")
 
     def _run_tft_M108(self) -> str:
@@ -978,18 +937,18 @@ class TFTAdapter:
             self.write_response(message=f"echo:{arg_p}\nok" if arg_p else "ok")
 
     def _run_tft_G29(self, *args: str) -> str:
-        self.queue_gcode("BED_MESH_CLEAR")
+        self.queue_command("BED_MESH_CLEAR")
         cmd = "BED_MESH_CALIBRATE"
         if args:
             cmd += " " + " ".join(args)
-        self.queue_gcode(cmd)
+        self.queue_command(cmd)
         self.write_response(message="ok")
 
     def _run_tft_M201(self, **params_dict: Any) -> None:
         if any(key in params_dict for key in ("X", "Y")):
             acceleration = int(params_dict.get('X', params_dict.get('Y', 0)))
             command = f"SET_VELOCITY_LIMIT ACCEL={acceleration} ACCEL_TO_DECEL={acceleration / 2}"
-            self.queue_gcode(command)
+            self.queue_command(command)
             self.write_response("ok")
         else:
             self.write_response("!! Invalid M201 command")
@@ -998,7 +957,7 @@ class TFTAdapter:
         if any(key in params_dict for key in ("X", "Y")):
             velocity = int(params_dict.get('X', params_dict.get('Y', 0)))
             command = f"SET_VELOCITY_LIMIT VELOCITY={velocity}"
-            self.queue_gcode(command)
+            self.queue_command(command)
             self.write_response("ok")
         else:
             self.write_response("!! Invalid M203 command")
@@ -1007,7 +966,7 @@ class TFTAdapter:
         if any(key in params_dict for key in ("X", "Y", "Z", "E")):
             offsets = " ".join(f"{axis}={value}" for axis, value in params_dict.items() if axis in ("X", "Y", "Z", "E"))
             command = f"SET_GCODE_OFFSET {offsets}"
-            self.queue_gcode(command)
+            self.queue_command(command)
             self.write_response("ok")
         else:
             self.write_response("!! Invalid M206 command")
