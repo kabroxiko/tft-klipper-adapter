@@ -487,11 +487,21 @@ class TFTAdapter:
         if gcode in self.special_gcodes:
             sgc_func = self.special_gcodes[gcode]
             script = sgc_func(parts[1:])
+            logging.info(f"Special GCode: {script}")
 
         if not script:
             return
         else:
-            logging.warning(f"Unknown command: {command}")
+            logging.warning(f"Unregistered command: {command}")
+            self.queue_gcode(command)
+
+        self.queue_gcode(script)
+
+    def queue_gcode(self, script: str) -> None:
+        self.gc_queue.append(script)
+        if not self.gq_busy:
+            self.gq_busy = True
+            self.event_loop.register_callback(self._process_gcode_queue)
 
     async def _handle_probe_test(self) -> None:
         await self.websocket_handler.send_moonraker_request("printer.gcode.script", {"script": "QUERY_PROBE"})
@@ -920,7 +930,7 @@ class TFTAdapter:
         self.write_response("ok")
 
     def _run_tft_M524(self) -> str:
-        self.queue_command("CANCEL_PRINT")
+        self.queue_gcode("CANCEL_PRINT")
         self.write_response(message="ok")
 
     def _run_tft_M108(self) -> str:
@@ -937,18 +947,18 @@ class TFTAdapter:
             self.write_response(message=f"echo:{arg_p}\nok" if arg_p else "ok")
 
     def _run_tft_G29(self, *args: str) -> str:
-        self.queue_command("BED_MESH_CLEAR")
+        self.queue_gcode("BED_MESH_CLEAR")
         cmd = "BED_MESH_CALIBRATE"
         if args:
             cmd += " " + " ".join(args)
-        self.queue_command(cmd)
+        self.queue_gcode(cmd)
         self.write_response(message="ok")
 
     def _run_tft_M201(self, **params_dict: Any) -> None:
         if any(key in params_dict for key in ("X", "Y")):
             acceleration = int(params_dict.get('X', params_dict.get('Y', 0)))
             command = f"SET_VELOCITY_LIMIT ACCEL={acceleration} ACCEL_TO_DECEL={acceleration / 2}"
-            self.queue_command(command)
+            self.queue_gcode(command)
             self.write_response("ok")
         else:
             self.write_response("!! Invalid M201 command")
@@ -957,7 +967,7 @@ class TFTAdapter:
         if any(key in params_dict for key in ("X", "Y")):
             velocity = int(params_dict.get('X', params_dict.get('Y', 0)))
             command = f"SET_VELOCITY_LIMIT VELOCITY={velocity}"
-            self.queue_command(command)
+            self.queue_gcode(command)
             self.write_response("ok")
         else:
             self.write_response("!! Invalid M203 command")
@@ -966,7 +976,7 @@ class TFTAdapter:
         if any(key in params_dict for key in ("X", "Y", "Z", "E")):
             offsets = " ".join(f"{axis}={value}" for axis, value in params_dict.items() if axis in ("X", "Y", "Z", "E"))
             command = f"SET_GCODE_OFFSET {offsets}"
-            self.queue_command(command)
+            self.queue_gcode(command)
             self.write_response("ok")
         else:
             self.write_response("!! Invalid M206 command")
