@@ -465,14 +465,14 @@ class TFTAdapter:
         # Check for commands that query state and require immediate response
         if gcode in self.direct_gcodes:
             params: Dict[str, Any] = {}
-            for p in parts[1:]:
-                if p[0] not in "PSR":
-                    params["arg_p"] = p.strip(" \"\t\n")
+            for part in parts[1:]:
+                if part[0] not in "PSR":
+                    params["arg_p"] = part.strip(" \"\t\n")
                     continue
-                arg = p[0].lower()
+                arg = part[0].lower()
                 try:
-                    val = int(p[1:].strip()) if arg in "sr" \
-                        else p[1:].trip(" \"\t\n")
+                    val = int(part[1:].strip()) if arg in "sr" \
+                        else part[1:].trip(" \"\t\n")
                 except Exception:
                     msg = f"tft: Error parsing direct gcode {command}"
                     self.handle_gcode_response("!! " + msg)
