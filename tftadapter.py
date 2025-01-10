@@ -396,6 +396,23 @@ class TFTAdapter:
             logging.exception("Unable to complete subscription request")
         self.is_shutdown = False
         self.is_ready = True
+        self.event_loop.create_task(self._monitor_print_status())
+
+    async def _monitor_print_status(self) -> None:
+        while True:
+            await asyncio.sleep(1)
+            print_stats = self.printer_state.get('print_stats', {})
+            logging.info(f"print_stats: {print_stats}")
+            state = print_stats.get('state', 'standby')
+            if state == 'printing' and self.last_printer_state != 'printing':
+                self.write_response(action="print_start")
+            elif state == 'paused' and self.last_printer_state != 'paused':
+                self.write_response(action="pause")
+            elif state == 'printing' and self.last_printer_state != 'printing':
+                self.write_response(action="resume")
+            elif state == 'cancelled' and self.last_printer_state != 'cancelled':
+                self.write_response(action="cancel")
+            self.last_printer_state = state
 
     def _process_klippy_shutdown(self) -> None:
         self.is_shutdown = True
