@@ -27,6 +27,7 @@ from typing import (
     List,
     Callable,
     Coroutine,
+    Union,
 )
 if TYPE_CHECKING:
     from ..confighelper import ConfigHelper
@@ -325,7 +326,9 @@ class TFTAdapter:
             'M221': self._run_tft_M221,
             'M280': self._run_tft_M280,
             'M503': self._run_tft_M503,
-            'M524': self._run_tft_M524
+            'M524': self._run_tft_M524,
+            'M701': self._run_tft_M701,
+            'M702': self._run_tft_M702
         }
 
         # These gcodes require special parsing or handling prior to being
@@ -340,8 +343,6 @@ class TFTAdapter:
             'M150': self._prepare_M150,
             'M121': lambda args: "RESTORE_GCODE_STATE STATE=TFT",
             'M290': self._prepare_M290,
-            'M701': self._prepare_M701_M702,
-            'M702': self._prepare_M701_M702,
             'M999': lambda args: "FIRMWARE_RESTART",
         }
 
@@ -418,13 +419,12 @@ class TFTAdapter:
         while True:
             await asyncio.sleep(1)
             print_stats = self.printer_state.get('print_stats', {})
-            logging.info(f"print_stats: {print_stats.get('state')}")
             state = print_stats.get('state', 'standby')
-            if state == 'standby' and self.last_printer_state != 'standby':
+            if state == 'printing' and self.last_printer_state != 'printing':
                 self.write_response(action="print_start")
-            elif state == 'paused' and self.last_printer_state != 'paused':
+            elif state == 'paused' and self.last_printer_state == 'paused':
                 self.write_response(action="pause")
-            elif state == 'printing' and self.last_printer_state != 'printing':
+            elif state == 'printing' and self.last_printer_state == 'paused':
                 self.write_response(action="resume")
             elif state == 'cancelled' and self.last_printer_state != 'cancelled':
                 self.write_response(action="cancel")
@@ -487,18 +487,19 @@ class TFTAdapter:
         if gcode in self.special_gcodes:
             sgc_func = self.special_gcodes[gcode]
             script = sgc_func(parts[1:])
-            logging.info(f"Special GCode: {script}")
+        else:
+            logging.warning(f"Unregistered command: {command}")
 
         if not script:
             return
-        else:
-            logging.warning(f"Unregistered command: {command}")
-            self.queue_gcode(command)
 
         self.queue_gcode(script)
 
-    def queue_gcode(self, script: str) -> None:
-        self.gc_queue.append(script)
+    def queue_gcode(self, script: Union[str, List[str]]) -> None:
+        if isinstance(script, str):
+            self.gc_queue.append(script)
+        else:
+            self.gc_queue.extend(script)
         if not self.gq_busy:
             self.gq_busy = True
             self.event_loop.register_callback(self._process_gcode_queue)
@@ -638,27 +639,6 @@ class TFTAdapter:
         offset = args[0][1:].strip()
         return f"SET_GCODE_OFFSET Z_ADJUST={offset} MOVE=1"
 
-    def _prepare_M701_M702(self, args: List[str]) -> str:
-        length = 25
-        params_dict = {
-            'L': length if args[0] == "M701" else -1 * length,
-            'T': args[1] if len(args) > 1 else 0,
-            'Z': args[2] if len(args) > 2 else 0
-        }
-        return self._handle_filament(params_dict)
-
-    async def _handle_filament(self, params_dict: Dict[str, Any]) -> str:
-        length = params_dict.get("L")
-        extruder = params_dict.get("T")
-        zmove = params_dict.get("Z")
-        command = [
-            "G91",               # Relative Positioning
-            f"G92 E{extruder}",  # Reset Extruder
-            f"G1 Z{zmove} E{length} F{3*60}",  # Extrude or Retract
-            "G92 E0"              # Reset Extruder
-        ]
-        return await self.websocket_handler.send_moonraker_request("printer.gcode.script", [{"script": cmd} for cmd in command])
-
     def handle_gcode_response(self, response: str) -> None:
         # Only queue up "non-trivial" gcode responses.  At the
         # moment we'll handle state changes and errors
@@ -757,7 +737,7 @@ class TFTAdapter:
         if path.startswith("0:/"):
             path = path[3:]
         elif path[0] == "/":
-            path = path[1:]
+            path[1:]
 
         if not path.startswith("gcodes/"):
             path = "gcodes/" + path
@@ -980,6 +960,35 @@ class TFTAdapter:
             self.write_response("ok")
         else:
             self.write_response("!! Invalid M206 command")
+
+    def _run_tft_M701(self) -> str:
+        params = {
+            "length": 25,
+            "extruder": 0,
+            "zmove": 0
+        }
+        return self._handle_filament(params)
+
+    def _run_tft_M702(self) -> str:
+        params = {
+            "length": -25,
+            "extruder": 0,
+            "zmove": 0
+        }
+        return self._handle_filament(params)
+
+    def _handle_filament(self, params: Dict[str, Any]) -> str:
+        length = params.get("length")
+        extruder = params.get("extruder")
+        zmove = params.get("zmove")
+        cmd = [
+            "G91",               # Relative Positioning
+            f"G92 E{extruder}",  # Reset Extruder
+            f"G1 Z{zmove} E{length} F{3*60}",  # Extrude or Retract
+            "G92 E0"              # Reset Extruder
+        ]
+        self.queue_gcode(cmd)
+        self.write_response("ok")
 
     def close(self) -> None:
         self.ser_conn.disconnect()
