@@ -300,6 +300,7 @@ class TFTAdapter:
             'M20': self._run_tft_M20,
             'M21': self._run_tft_M21,
             'M27': self._run_tft_M27,
+            'G29': self._run_tft_G29,
             'M30': self._run_tft_M30,
             'M33': self._run_tft_M33,
             'M36': self._run_tft_M36,
@@ -316,7 +317,7 @@ class TFTAdapter:
             'M220': self._run_tft_M220,
             'M221': self._run_tft_M221,
             'M503': self._run_tft_M503,
-            'M524': self._run_tft_M524,
+            'M524': self._run_tft_M524
         }
 
         # These gcodes require special parsing or handling prior to being
@@ -920,6 +921,14 @@ class TFTAdapter:
             self.write_response(action="notification remote resume")
         else:
             self.write_response(message=f"echo:{arg_p}\nok" if arg_p else "ok")
+
+    def _run_tft_G29(self, *args: str) -> str:
+        self.queue_gcode("BED_MESH_CLEAR")
+        cmd = "BED_MESH_CALIBRATE"
+        if args:
+            cmd += " " + " ".join(args)
+        self.queue_gcode(cmd)
+        self.write_response(message="ok")
 
     def close(self) -> None:
         self.ser_conn.disconnect()
