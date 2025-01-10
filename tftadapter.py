@@ -46,6 +46,10 @@ RESTART_GCODES = ["RESTART", "FIRMWARE_RESTART"]
 
 MACHINE_TYPE = "Artillery Genius Pro"
 
+PRINT_STATUS_TEMPLATE = (
+    "//action:notification Layer Left {{ (virtual_sdcard.file_position or 0) }}/{{ (virtual_sdcard.file_size or 0) }}"
+)
+
 TEMPERATURE_TEMPLATE = (
     "T:{{ extruder.temperature | round(2) }} /{{ extruder.target | round(2) }} "
     "B:{{ heater_bed.temperature | round(2) }} /{{ heater_bed.target | round(2) }} "
@@ -295,6 +299,7 @@ class TFTAdapter:
         self.direct_gcodes: Dict[str, FlexCallback] = {
             'M20': self._run_tft_M20,
             'M21': self._run_tft_M21,
+            'M27': self._run_tft_M27,
             'M30': self._run_tft_M30,
             'M33': self._run_tft_M33,
             'M36': self._run_tft_M36,
@@ -402,7 +407,7 @@ class TFTAdapter:
         while True:
             await asyncio.sleep(1)
             print_stats = self.printer_state.get('print_stats', {})
-            logging.info(f"print_stats: {print_stats}")
+            logging.info(f"print_stats: {print_stats.get('state')}")
             state = print_stats.get('state', 'standby')
             if state == 'printing' and self.last_printer_state != 'printing':
                 self.write_response(action="print_start")
@@ -588,7 +593,7 @@ class TFTAdapter:
         sd_state = self.printer_state.get("print_stats", {}).get("state", "standby")
         if sd_state == "paused":
             return "RESUME"
-        elif sd_state == "standby":
+        elif sd_state in ("standby", "cancelled"):
             return f"SDCARD_PRINT_FILE FILENAME=\"{self.current_file}\""
         else:
             raise TFTError("Cannot start printing, printer is not in a stopped state")
@@ -665,7 +670,13 @@ class TFTAdapter:
     async def _report_position(self, interval: int) -> None:
         while self.ser_conn.connected and interval > 0:
             report = Template(POSITION_TEMPLATE).render(**self.printer_state)
-            self.write_response(f"ok {report}")
+            self.write_response(f"{report}")
+            await asyncio.sleep(interval)
+
+    async def _report_print_status(self, interval: int) -> None:
+        while self.ser_conn.connected and interval > 0:
+            report = Template(PRINT_STATUS_TEMPLATE).render(**self.printer_state)
+            self.write_response(f"{report}")
             await asyncio.sleep(interval)
 
     def _run_tft_M21(self) -> str:
@@ -845,6 +856,23 @@ class TFTAdapter:
                 self.write_response("ok")
         except (IndexError, ValueError):
             self.write_response("!! Invalid M154 command")
+
+    def _run_tft_M27(self, arg_s: int) -> None:
+        try:
+            interval = arg_s
+            if interval > 0:
+                if self.position_report_task:
+                    self.position_report_task.cancel()
+                self.position_report_task = self.event_loop.create_task(
+                    self._report_print_status(interval)
+                )
+            else:
+                if self.position_report_task:
+                    self.position_report_task.cancel()
+                    self.position_report_task = None
+                self.write_response("ok")
+        except (IndexError, ValueError):
+            self.write_response("!! Invalid M27 command")
 
     def _run_tft_M211(self) -> str:
         filament_sensor_enabled = self.printer_state.get("filament_switch_sensor filament_sensor", {}).get("enabled", False)
