@@ -416,7 +416,7 @@ class TFTAdapter:
             print_stats = self.printer_state.get('print_stats', {})
             logging.info(f"print_stats: {print_stats.get('state')}")
             state = print_stats.get('state', 'standby')
-            if state == 'printing' and self.last_printer_state != 'printing':
+            if state == 'standby' and self.last_printer_state != 'standby':
                 self.write_response(action="print_start")
             elif state == 'paused' and self.last_printer_state != 'paused':
                 self.write_response(action="pause")
