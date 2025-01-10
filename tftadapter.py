@@ -313,6 +313,9 @@ class TFTAdapter:
             'M115': self._run_tft_M115,
             'M154': self._run_tft_M154,
             'M155': self._run_tft_M155,
+            'M201': self._run_tft_M201,
+            'M203': self._run_tft_M203,
+            'M206': self._run_tft_M206,
             'M211': self._run_tft_M211,
             'M220': self._run_tft_M220,
             'M221': self._run_tft_M221,
@@ -929,6 +932,33 @@ class TFTAdapter:
             cmd += " " + " ".join(args)
         self.queue_gcode(cmd)
         self.write_response(message="ok")
+
+    def _run_tft_M201(self, **params_dict: Any) -> None:
+        if any(key in params_dict for key in ("X", "Y")):
+            acceleration = int(params_dict.get('X', params_dict.get('Y', 0)))
+            command = f"SET_VELOCITY_LIMIT ACCEL={acceleration} ACCEL_TO_DECEL={acceleration / 2}"
+            self.queue_gcode(command)
+            self.write_response("ok")
+        else:
+            self.write_response("!! Invalid M201 command")
+
+    def _run_tft_M203(self, **params_dict: Any) -> None:
+        if any(key in params_dict for key in ("X", "Y")):
+            velocity = int(params_dict.get('X', params_dict.get('Y', 0)))
+            command = f"SET_VELOCITY_LIMIT VELOCITY={velocity}"
+            self.queue_gcode(command)
+            self.write_response("ok")
+        else:
+            self.write_response("!! Invalid M203 command")
+
+    def _run_tft_M206(self, **params_dict: Any) -> None:
+        if any(key in params_dict for key in ("X", "Y", "Z", "E")):
+            offsets = " ".join(f"{axis}={value}" for axis, value in params_dict.items() if axis in ("X", "Y", "Z", "E"))
+            command = f"SET_GCODE_OFFSET {offsets}"
+            self.queue_gcode(command)
+            self.write_response("ok")
+        else:
+            self.write_response("!! Invalid M206 command")
 
     def close(self) -> None:
         self.ser_conn.disconnect()
