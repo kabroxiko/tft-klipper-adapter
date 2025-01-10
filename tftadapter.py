@@ -489,6 +489,7 @@ class TFTAdapter:
             script = sgc_func(parts[1:])
         else:
             logging.warning(f"Unregistered command: {command}")
+            self.write_response("ok")
 
         if not script:
             return
