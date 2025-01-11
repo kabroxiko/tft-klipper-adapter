@@ -346,7 +346,7 @@ class TFTAdapter:
             'M150': self._prepare_set_led,
             'M121': lambda args: "RESTORE_GCODE_STATE STATE=TFT",
             'M290': self._prepare_set_gcode_offset,
-            # 'M420': self._prepare_set_bed_leveling,
+            'M420': self._prepare_set_bed_leveling,
             'M999': lambda args: "FIRMWARE_RESTART",
         }
 
