@@ -346,7 +346,7 @@ class TFTAdapter:
             'M150': self._prepare_set_led,
             'M121': lambda args: "RESTORE_GCODE_STATE STATE=TFT",
             'M290': self._prepare_set_gcode_offset,
-            'M420': self._prepare_set_bed_leveling,
+            # 'M420': self._prepare_set_bed_leveling,
             'M999': lambda args: "FIRMWARE_RESTART",
         }
 
@@ -541,11 +541,13 @@ class TFTAdapter:
     async def _process_gcode_queue(self) -> None:
         while self.gc_queue:
             script = self.gc_queue.pop(0)
+            logging.info(f"script: {script}")
             try:
                 if script in RESTART_GCODES:
-                    await self.klippy_apis.do_restart(script)
+                    result = await self.klippy_apis.do_restart(script)
                 else:
-                    await self.klippy_apis.run_gcode(script)
+                    result = await self.klippy_apis.run_gcode(script)
+                logging.info(f"Result: {result}")
             except self.server.error:
                 msg = f"Error executing script {script}"
                 self.handle_gcode_response("!! " + msg)
@@ -656,10 +658,9 @@ class TFTAdapter:
         try:
             enable = int(args[0]) if args else 1
             if enable == 0:
-                self.queue_gcode("BED_MESH_CLEAR")
+                return "BED_MESH_CLEAR"
             else:
-                self.queue_gcode("BED_MESH_PROFILE LOAD=default")
-            self.write_response("ok")
+                return "BED_MESH_PROFILE LOAD=default"
         except (IndexError, ValueError):
             self.write_response("!! Invalid M420 command")
 
@@ -875,7 +876,7 @@ class TFTAdapter:
                     self.position_report_task.cancel()
                     self.position_report_task = None
                 self.write_response("ok")
-        except (IndexIndexError, ValueError):
+        except (IndexError, ValueError):
             self.write_response("!! Invalid M154 command")
 
     def _set_print_status_report(self, arg_s: int) -> None:
@@ -892,7 +893,7 @@ class TFTAdapter:
                     self.position_report_task.cancel()
                     self.position_report_task = None
                 self.write_response("ok")
-        except (IndexIndexError, ValueError):
+        except (IndexError, ValueError):
             self.write_response("!! Invalid M27 command")
 
     def _report_software_endstops(self) -> str:
