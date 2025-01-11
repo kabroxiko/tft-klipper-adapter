@@ -302,47 +302,50 @@ class TFTAdapter:
         # These commands are directly executued on the server and do not to
         # make a request to Klippy
         self.direct_gcodes: Dict[str, FlexCallback] = {
-            'M20': self._run_tft_M20,
-            'M21': self._run_tft_M21,
-            'M27': self._run_tft_M27,
-            'G29': self._run_tft_G29,
-            'M30': self._run_tft_M30,
-            'M33': self._run_tft_M33,
-            'M36': self._run_tft_M36,
-            'M82': self._run_tft_ok,
-            'M92': self._run_tft_ok,
-            'M105': self._run_tft_M105,
-            'M108': self._run_tft_M108,
-            'M114': self._run_tft_M114,
-            'M118': self._run_tft_M118,
-            'M115': self._run_tft_M115,
-            'M154': self._run_tft_M154,
-            'M155': self._run_tft_M155,
-            'M201': self._run_tft_M201,
-            'M203': self._run_tft_M203,
-            'M206': self._run_tft_M206,
-            'M211': self._run_tft_M211,
-            'M220': self._run_tft_M220,
-            'M221': self._run_tft_M221,
+            'M20': self._list_sd_files,
+            'M21': self._init_sd_card,
+            'M27': self._set_print_status_report,
+            'G29': self._calibrate_bed_mesh,
+            'M30': self._delete_sd_file,
+            'M33': self._select_sd_file,
+            'M36': self._get_sd_file_info,
+            'M82': self._send_ok_response,
+            'M92': self._send_ok_response,
+            'M108': self._send_ok_response,
+            'M118': self._handle_m118_command,
+            'M154': self._set_position_report,
+            'M155': self._set_temperature_report,
+            'M201': self._set_acceleration,
+            'M203': self._set_velocity,
+            'M206': self._set_gcode_offset,
             'M280': self._run_tft_M280,
-            'M503': self._run_tft_M503,
-            'M524': self._run_tft_M524,
-            'M701': self._run_tft_M701,
-            'M702': self._run_tft_M702
+            'M503': self._report_settings,
+            'M524': self._cancel_print,
+            'M701': self._load_filament,
+            'M702': self._unload_filament
+        }
+
+        self.report_gcodes: Dict[str, str] = {
+            'M105': TEMPERATURE_TEMPLATE,
+            'M114': POSITION_TEMPLATE,
+            'M115': FIRMWARE_INFO_TEMPLATE,
+            'M211': SOFTWARE_ENDSTOPS_TEMPLATE,
+            'M220': FEED_RATE_TEMPLATE,
+            'M221': FLOW_RATE_TEMPLATE,
         }
 
         # These gcodes require special parsing or handling prior to being
         # sent via Klippy's "gcode/script" api command.
         self.special_gcodes: Dict[str, Callable[[List[str]], str]] = {
             'M0': lambda args: "CANCEL_PRINT",
-            'M23': self._prepare_M23,
-            'M24': self._prepare_M24,
-            'M25': self._prepare_M25,
-            'M32': self._prepare_M32,
+            'M23': self._prepare_select_sd_file,
+            'M24': self._prepare_start_print,
+            'M25': self._prepare_pause_print,
+            'M32': self._prepare_print_file,
             'M120': lambda args: "SAVE_GCODE_STATE STATE=TFT",
-            'M150': self._prepare_M150,
+            'M150': self._prepare_set_led,
             'M121': lambda args: "RESTORE_GCODE_STATE STATE=TFT",
-            'M290': self._prepare_M290,
+            'M290': self._prepare_set_gcode_offset,
             'M999': lambda args: "FIRMWARE_RESTART",
         }
 
@@ -483,6 +486,13 @@ class TFTAdapter:
             self.queue_command(func, **params)
             return
 
+        # Check for report gcodes
+        if gcode in self.report_gcodes:
+            template = self.report_gcodes[gcode]
+            report = Template(template).render(**self.printer_state)
+            self.write_response(f"{report}\nok")
+            return
+
         # Prepare GCodes that require special handling
         if gcode in self.special_gcodes:
             sgc_func = self.special_gcodes[gcode]
@@ -495,15 +505,6 @@ class TFTAdapter:
             return
 
         self.queue_gcode(script)
-
-    def queue_gcode(self, script: Union[str, List[str]]) -> None:
-        if isinstance(script, str):
-            self.gc_queue.append(script)
-        else:
-            self.gc_queue.extend(script)
-        if not self.gq_busy:
-            self.gq_busy = True
-            self.event_loop.register_callback(self._process_gcode_queue)
 
     async def _handle_probe_test(self) -> None:
         await self.websocket_handler.send_moonraker_request("printer.gcode.script", {"script": "QUERY_PROBE"})
@@ -549,6 +550,15 @@ class TFTAdapter:
                 logging.exception(msg)
         self.gq_busy = False
 
+    def queue_gcode(self, script: Union[str, List[str]]) -> None:
+        if isinstance(script, str):
+            self.gc_queue.append(script)
+        else:
+            self.gc_queue.extend(script)
+        if not self.gq_busy:
+            self.gq_busy = True
+            self.event_loop.register_callback(self._process_gcode_queue)
+
     def queue_command(self, cmd: FlexCallback, *args, **kwargs) -> None:
         self.command_queue.append((cmd, args, kwargs))
         if not self.cq_busy:
@@ -584,7 +594,7 @@ class TFTAdapter:
             filename = "/" + filename
         return filename
 
-    def _prepare_M23(self, args: List[str]) -> str:
+    def _prepare_select_sd_file(self, args: List[str]) -> str:
         filename = self._clean_filename(args[0])
         self.current_file = filename
         file_metadata = self.file_manager.get_file_metadata(filename)
@@ -593,7 +603,7 @@ class TFTAdapter:
         self.write_response(f"{response}\nok")
         return f"M23 {self.current_file}"
 
-    def _prepare_M24(self, args: List[str]) -> str:
+    def _prepare_start_print(self, args: List[str]) -> str:
         if not self.current_file:
             raise TFTError("No file selected to print")
         sd_state = self.printer_state.get("print_stats", {}).get("state", "standby")
@@ -604,20 +614,20 @@ class TFTAdapter:
         else:
             raise TFTError("Cannot start printing, printer is not in a stopped state")
 
-    def _prepare_M25(self, args: List[str]) -> str:
+    def _prepare_pause_print(self, args: List[str]) -> str:
         sd_state = self.printer_state.get("print_stats", {}).get("state", "standby")
         if sd_state == "printing":
             return "PAUSE"
         else:
             raise TFTError("Cannot pause, printer is not printing")
 
-    def _prepare_M32(self, args: List[str]) -> str:
+    def _prepare_print_file(self, args: List[str]) -> str:
         filename = self._clean_filename(args[0])
         # Escape existing double quotes in the file name
         filename = filename.replace("\"", "\\\"")
         return f"SDCARD_PRINT_FILE FILENAME=\"{filename}\""
 
-    def _prepare_M150(self, args: List[str]) -> str:
+    def _prepare_set_led(self, args: List[str]) -> str:
         params = {arg[0]: int(arg[1:]) for arg in args}
         red = params.get('R', 0) / 255
         green = params.get('U', 0) / 255
@@ -635,7 +645,7 @@ class TFTAdapter:
         self.write_response("ok")
         return cmd
 
-    def _prepare_M290(self, args: List[str]) -> str:
+    def _prepare_set_gcode_offset(self, args: List[str]) -> str:
         # args should in in the format Z0.02
         offset = args[0][1:].strip()
         return f"SET_GCODE_OFFSET Z_ADJUST={offset} MOVE=1"
@@ -667,28 +677,32 @@ class TFTAdapter:
         byte_resp = (msg + "\n").encode("utf-8")
         self.ser_conn.send(byte_resp)
 
-    async def _report_temperature(self, interval: int) -> None:
-        while self.ser_conn.connected and interval > 0:
-            report = Template(TEMPERATURE_TEMPLATE).render(**self.printer_state)
-            self.write_response(f"ok {report}")
-            await asyncio.sleep(interval)
+    async def send_to_btt(self, command=None, action=None, message=None, error=None):
+        if command:
+            self.serial_handler.write(f'M118 {command}')
+        elif action:
+            self.serial_handler.write(f'M118 {"//action:" + action}')
+        elif message:
+            self.serial_handler.write(f'M118 {message}')
+        elif error:
+            self.serial_handler.write(f'M118 {"Error:" + error}')
 
-    async def _report_position(self, interval: int) -> None:
+    async def notify_timeleft(self, timeleft):
+        await self.send_to_btt(action=f'notification Time Left {timeleft}')
+
+    async def notify_dataleft(self, current, max_data):
+        await self.send_to_btt(action=f'notification Data Left {current}/{max_data}')
+
+    async def report(self, template, interval):
         while self.ser_conn.connected and interval > 0:
-            report = Template(POSITION_TEMPLATE).render(**self.printer_state)
+            report = Template(template).render(**self.printer_state)
             self.write_response(f"{report}")
             await asyncio.sleep(interval)
 
-    async def _report_print_status(self, interval: int) -> None:
-        while self.ser_conn.connected and interval > 0:
-            report = Template(PRINT_STATUS_TEMPLATE).render(**self.printer_state)
-            self.write_response(f"{report}")
-            await asyncio.sleep(interval)
-
-    def _run_tft_M21(self) -> str:
+    def _init_sd_card(self) -> str:
         self.write_response(message="SD card ok\nok")
 
-    def _run_tft_M20(self, arg_p: Optional[str] = None) -> None:
+    def _list_sd_files(self, arg_p: Optional[str] = None) -> None:
         response_type = 2
         if response_type != 2:
             logging.info(
@@ -730,7 +744,7 @@ class TFTAdapter:
         marlin_response = Template(FILE_LIST_TEMPLATE).render(files=response['files'])
         self.write_response(marlin_response)
 
-    async def _run_tft_M30(self, arg_p: str = "") -> None:
+    async def _delete_sd_file(self, arg_p: str = "") -> None:
         # Delete a file.  Clean up the file name and make sure
         # it is relative to the "gcodes" root.
         path = arg_p
@@ -744,11 +758,11 @@ class TFTAdapter:
             path = "gcodes/" + path
         await self.file_manager.delete_file(path)
 
-    def _run_tft_M36(self, arg_p: Optional[str] = None) -> None:
+    def _get_sd_file_info(self, arg_p: Optional[str] = None) -> None:
         response: Dict[str, Any] = {}
         filename: Optional[str] = arg_p
-        sd_status = self.printer_state.get('virtual_sdcard', {})
-        print_stats = self.printer_state.get('print_stats', {})
+        sd_status = self.printer_state.get("virtual_sdcard", {})
+        print_stats = self.printer_state.get("print_stats", {})
         if filename is None:
             # TFT is requesting file information on a
             # currently printed file
@@ -799,7 +813,7 @@ class TFTAdapter:
             response['err'] = 1
         self.write_response(response)
 
-    def _run_tft_M33(self, arg_p: Optional[str] = None) -> None:
+    def _select_sd_file(self, arg_p: Optional[str] = None) -> None:
         filename: Optional[str] = arg_p
         if filename is None:
             self.write_response("!! Missing filename\nok")
@@ -817,26 +831,14 @@ class TFTAdapter:
 
         self.write_response(f"{filename}\nok")
 
-    def _run_tft_M105(self) -> str:
-        report = Template(TEMPERATURE_TEMPLATE).render(**self.printer_state)
-        self.write_response(f"{report}\nok")
-
-    def _run_tft_M114(self) -> str:
-        report = Template(POSITION_TEMPLATE).render(**self.printer_state)
-        self.write_response(f"{report}\nok")
-
-    def _run_tft_M115(self) -> str:
-        report = Template(FIRMWARE_INFO_TEMPLATE).render(**self.printer_state)
-        self.write_response(f"{report}\nok")
-
-    def _run_tft_M155(self, arg_s: int) -> None:
+    def _set_temperature_report(self, arg_s: int) -> None:
         try:
             interval = arg_s
             if interval > 0:
                 if self.temperature_report_task:
                     self.temperature_report_task.cancel()
                 self.temperature_report_task = self.event_loop.create_task(
-                    self._report_temperature(interval)
+                    self.report(f"ok {TEMPERATURE_TEMPLATE}", interval)
                 )
             else:
                 if self.temperature_report_task:
@@ -846,57 +848,48 @@ class TFTAdapter:
         except (IndexError, ValueError):
             self.write_response("!! Invalid M155 command")
 
-    def _run_tft_M154(self, arg_s: int) -> None:
+    def _set_position_report(self, arg_s: int) -> None:
         try:
             interval = arg_s
             if interval > 0:
                 if self.position_report_task:
                     self.position_report_task.cancel()
                 self.position_report_task = self.event_loop.create_task(
-                    self._report_position(interval)
+                    self.report(POSITION_TEMPLATE, interval)
                 )
             else:
                 if self.position_report_task:
                     self.position_report_task.cancel()
                     self.position_report_task = None
                 self.write_response("ok")
-        except (IndexError, ValueError):
+        except (IndexIndexError, ValueError):
             self.write_response("!! Invalid M154 command")
 
-    def _run_tft_M27(self, arg_s: int) -> None:
+    def _set_print_status_report(self, arg_s: int) -> None:
         try:
             interval = arg_s
             if interval > 0:
                 if self.position_report_task:
                     self.position_report_task.cancel()
                 self.position_report_task = self.event_loop.create_task(
-                    self._report_print_status(interval)
+                    self.report(PRINT_STATUS_TEMPLATE, interval)
                 )
             else:
                 if self.position_report_task:
                     self.position_report_task.cancel()
                     self.position_report_task = None
                 self.write_response("ok")
-        except (IndexError, ValueError):
+        except (IndexIndexError, ValueError):
             self.write_response("!! Invalid M27 command")
 
-    def _run_tft_M211(self) -> str:
+    def _report_software_endstops(self) -> str:
         filament_sensor_enabled = self.printer_state.get("filament_switch_sensor filament_sensor", {}).get("enabled", False)
         state = {
             "state": "On" if filament_sensor_enabled else "Off"
         }
-        report = f"{Template(SOFTWARE_ENDSTOPS_TEMPLATE).render(**state)}"
-        self.write_response(f"{report}\nok")
+        self.write_response(f"{Template(SOFTWARE_ENDSTOPS_TEMPLATE).render(**state)}\nok")
 
-    def _run_tft_M220(self) -> str:
-        report = Template(FEED_RATE_TEMPLATE).render(**self.printer_state)
-        self.write_response(f"{report}\nok")
-
-    def _run_tft_M221(self) -> str:
-        report = Template(FLOW_RATE_TEMPLATE).render(**self.printer_state)
-        self.write_response(f"{report}\nok")
-
-    def _run_tft_M503(self, arg_s: Optional[str] = None) -> str:
+    def _report_settings(self, arg_s: Optional[str] = None) -> str:
         report = Template(REPORT_SETTINGS_TEMPLATE).render(
             **(
                 self.printer_state |
@@ -907,17 +900,17 @@ class TFTAdapter:
         )
         self.write_response(f"{report}\nok")
 
-    def _run_tft_ok(self, arg_p: Optional[str] = None, arg_s: Optional[str] = None) -> str:
+    def _send_ok_response(self, arg_p: Optional[str] = None, arg_s: Optional[str] = None) -> str:
         self.write_response("ok")
 
-    def _run_tft_M524(self) -> str:
+    def _cancel_print(self) -> str:
         self.queue_gcode("CANCEL_PRINT")
         self.write_response(message="ok")
 
-    def _run_tft_M108(self) -> str:
+    def _send_ok_response(self) -> str:
         self.write_response(message="ok")
 
-    def _run_tft_M118(self, arg_p: Optional[str] = None) -> str:
+    def _handle_m118_command(self, arg_p: Optional[str] = None) -> str:
         if arg_p and "P0 A1 action:cancel" in arg_p:
             self.write_response(action="cancel")
         elif arg_p and "P0 A1 action:notification remote pause" in arg_p:
@@ -927,7 +920,7 @@ class TFTAdapter:
         else:
             self.write_response(message=f"echo:{arg_p}\nok" if arg_p else "ok")
 
-    def _run_tft_G29(self, *args: str) -> str:
+    def _calibrate_bed_mesh(self, *args: str) -> str:
         self.queue_gcode("BED_MESH_CLEAR")
         cmd = "BED_MESH_CALIBRATE"
         if args:
@@ -935,7 +928,7 @@ class TFTAdapter:
         self.queue_gcode(cmd)
         self.write_response(message="ok")
 
-    def _run_tft_M201(self, **params_dict: Any) -> None:
+    def _set_acceleration(self, **params_dict: Any) -> None:
         if any(key in params_dict for key in ("X", "Y")):
             acceleration = int(params_dict.get('X', params_dict.get('Y', 0)))
             command = f"SET_VELOCITY_LIMIT ACCEL={acceleration} ACCEL_TO_DECEL={acceleration / 2}"
@@ -944,7 +937,7 @@ class TFTAdapter:
         else:
             self.write_response("!! Invalid M201 command")
 
-    def _run_tft_M203(self, **params_dict: Any) -> None:
+    def _set_velocity(self, **params_dict: Any) -> None:
         if any(key in params_dict for key in ("X", "Y")):
             velocity = int(params_dict.get('X', params_dict.get('Y', 0)))
             command = f"SET_VELOCITY_LIMIT VELOCITY={velocity}"
@@ -953,7 +946,7 @@ class TFTAdapter:
         else:
             self.write_response("!! Invalid M203 command")
 
-    def _run_tft_M206(self, **params_dict: Any) -> None:
+    def _set_gcode_offset(self, **params_dict: Any) -> None:
         if any(key in params_dict for key in ("X", "Y", "Z", "E")):
             offsets = " ".join(f"{axis}={value}" for axis, value in params_dict.items() if axis in ("X", "Y", "Z", "E"))
             command = f"SET_GCODE_OFFSET {offsets}"
@@ -962,7 +955,7 @@ class TFTAdapter:
         else:
             self.write_response("!! Invalid M206 command")
 
-    def _run_tft_M701(self) -> str:
+    def _load_filament(self) -> str:
         params = {
             "length": 25,
             "extruder": 0,
@@ -970,7 +963,7 @@ class TFTAdapter:
         }
         return self._handle_filament(params)
 
-    def _run_tft_M702(self) -> str:
+    def _unload_filament(self) -> str:
         params = {
             "length": -25,
             "extruder": 0,
