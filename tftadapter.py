@@ -500,9 +500,10 @@ class TFTAdapter:
             script = sgc_func(parts[1:])
         else:
             logging.warning(f"Unregistered command: {command}")
-            self.write_response("ok")
+            script = command
 
         if not script:
+            logging.warning(f"No script generated for command: {command}")
             return
 
         self.queue_gcode(script)
