@@ -346,6 +346,7 @@ class TFTAdapter:
             'M150': self._prepare_set_led,
             'M121': lambda args: "RESTORE_GCODE_STATE STATE=TFT",
             'M290': self._prepare_set_gcode_offset,
+            'M420': self._prepare_set_bed_leveling,
             'M999': lambda args: "FIRMWARE_RESTART",
         }
 
@@ -649,6 +650,17 @@ class TFTAdapter:
         # args should in in the format Z0.02
         offset = args[0][1:].strip()
         return f"SET_GCODE_OFFSET Z_ADJUST={offset} MOVE=1"
+
+    def _prepare_set_bed_leveling(self, args: Optional[List[str]] = None) -> None:
+        try:
+            enable = int(args[0]) if args else 1
+            if enable == 0:
+                self.queue_gcode("BED_MESH_CLEAR")
+            else:
+                self.queue_gcode("BED_MESH_PROFILE LOAD=default")
+            self.write_response("ok")
+        except (IndexError, ValueError):
+            self.write_response("!! Invalid M420 command")
 
     def handle_gcode_response(self, response: str) -> None:
         # Only queue up "non-trivial" gcode responses.  At the
