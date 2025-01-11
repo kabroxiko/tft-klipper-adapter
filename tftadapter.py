@@ -346,7 +346,7 @@ class TFTAdapter:
             'M150': self._prepare_set_led,
             'M121': lambda args: "RESTORE_GCODE_STATE STATE=TFT",
             'M290': self._prepare_set_gcode_offset,
-            # 'M420': self._prepare_set_bed_leveling,
+            'M420': self._prepare_set_bed_leveling,
             'M999': lambda args: "FIRMWARE_RESTART",
         }
 
@@ -506,8 +506,7 @@ class TFTAdapter:
             logging.warning(f"No script generated for command: {command}")
             return
 
-        result = self.queue_gcode(script)
-        logging.info(f"Result: {result}")
+        self.queue_gcode(script)
 
     async def _handle_probe_test(self) -> None:
         await self.websocket_handler.send_moonraker_request("printer.gcode.script", {"script": "QUERY_PROBE"})
