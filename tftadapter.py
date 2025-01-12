@@ -133,6 +133,12 @@ FILE_SELECT_TEMPLATE = (
     "File selected"
 )
 
+PROBE_ACCURACY_TEMPLATE = (
+    "Mean: {{ avg_val }} Min: {{ min_val }} Max: {{ max_val }} Range: {{ range_val }}\n"
+    "Standard Deviation: {{ stddev_val }}\n"
+    "ok"
+)
+
 class SerialConnection:
     def __init__(self,
                  config: ConfigHelper,
@@ -321,7 +327,7 @@ class TFTAdapter:
             'M503': self._report_settings,
             'M524': self._cancel_print,
             'M701': self._load_filament,
-            'M702': self._unload_filament
+            'M702': self._unload_filament,
         }
 
         self.report_gcodes: Dict[str, str] = {
@@ -341,6 +347,7 @@ class TFTAdapter:
             'M24': self._prepare_start_print,
             'M25': self._prepare_pause_print,
             'M32': self._prepare_print_file,
+            'M48': self._prepare_probe_bed,
             'M120': lambda args: "SAVE_GCODE_STATE STATE=TFT",
             'M150': self._prepare_set_led,
             'M121': lambda args: "RESTORE_GCODE_STATE STATE=TFT",
@@ -669,6 +676,22 @@ class TFTAdapter:
                     response = f"{Template(PROBE_TEST_TEMPLATE).render(**self.printer_state)}\nok"
                     logging.info(f"response: {response}")
                     self.write_response(response)
+                elif "probe accuracy results:" in message:
+                    # Convert probe accuracy results to Marlin format
+                    parts = message.split(',')
+                    max_val = parts[0].split()[-1]
+                    min_val = parts[1].split()[-1]
+                    range_val = parts[2].split()[-1]
+                    avg_val = parts[3].split()[-1]
+                    stddev_val = parts[5].split()[-1]
+                    marlin_response = Template(PROBE_ACCURACY_TEMPLATE).render(
+                        max_val=max_val,
+                        min_val=min_val,
+                        range_val=range_val,
+                        avg_val=avg_val,
+                        stddev_val=stddev_val
+                    )
+                    self.write_response(marlin_response)
                 else:
                     self.write_response(error=message)
             else:
@@ -998,6 +1021,27 @@ class TFTAdapter:
         ]
         self.queue_gcode(cmd)
         self.write_response("ok")
+
+    def _prepare_probe_bed(self, args: List[str]) -> str:
+        """
+        Handle the M48 command to probe the bed and report the results.
+        Convert parameters from Marlin format to Klipper format.
+        """
+        cmd = "G28\nPROBE_ACCURACY"
+        param_map = {
+            'P': 'SAMPLES',
+            'S': 'SAMPLE_RETRACT_DIST',
+            'F': 'PROBE_SPEED'
+        }
+        klipper_args = []
+        for arg in args:
+            if arg[0] in param_map:
+                klipper_args.append(f"{param_map[arg[0]]}={arg[1:]}")
+            else:
+                klipper_args.append(arg)
+        if klipper_args:
+            cmd += " " + " ".join(klipper_args)
+        return cmd
 
     def close(self) -> None:
         self.ser_conn.disconnect()
