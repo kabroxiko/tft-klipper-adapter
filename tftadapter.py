@@ -351,7 +351,7 @@ class TFTAdapter:
             'M120': lambda args: "SAVE_GCODE_STATE STATE=TFT",
             'M150': self._prepare_set_led,
             'M121': lambda args: "RESTORE_GCODE_STATE STATE=TFT",
-            'M280': self._prepare_M280,
+            'M280': self._prepare_probe_command,
             'M290': self._prepare_set_gcode_offset,
             'M420': self._prepare_set_bed_leveling,
             'M999': lambda args: "FIRMWARE_RESTART",
@@ -603,7 +603,7 @@ class TFTAdapter:
         else:
             raise TFTError("Cannot pause, printer is not printing")
 
-    def _prepare_M280(self, args: List[str]) -> None:
+    def _prepare_probe_command(self, args: List[str]) -> None:
         position = args[1]
         if position == "S120":  # Test
             return "QUERY_PROBE"
