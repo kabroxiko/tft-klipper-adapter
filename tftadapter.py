@@ -318,7 +318,6 @@ class TFTAdapter:
             'M201': self._set_acceleration,
             'M203': self._set_velocity,
             'M206': self._set_gcode_offset,
-            'M280': self._run_tft_M280,
             'M503': self._report_settings,
             'M524': self._cancel_print,
             'M701': self._load_filament,
@@ -345,6 +344,7 @@ class TFTAdapter:
             'M120': lambda args: "SAVE_GCODE_STATE STATE=TFT",
             'M150': self._prepare_set_led,
             'M121': lambda args: "RESTORE_GCODE_STATE STATE=TFT",
+            'M280': self._prepare_M280,
             'M290': self._prepare_set_gcode_offset,
             'M420': self._prepare_set_bed_leveling,
             'M999': lambda args: "FIRMWARE_RESTART",
@@ -394,6 +394,7 @@ class TFTAdapter:
             "fan": None,
             "display_status": None,
             "print_stats": None,
+            "probe": None,
             "idle_timeout": None,
             "filament_switch_sensor filament_sensor": None,
             "gcode_macro TFT_BEEP": None
@@ -476,7 +477,7 @@ class TFTAdapter:
                 arg = part[0].lower()
                 try:
                     val = int(part[1:].strip()) if arg in "sr" \
-                        else part[1:].trip(" \"\t\n")
+                        else part[1:].strip(" \"\t\n")
                 except Exception:
                     msg = f"tft: Error parsing direct gcode {command}"
                     self.handle_gcode_response("!! " + msg)
@@ -507,36 +508,6 @@ class TFTAdapter:
             return
 
         self.queue_gcode(script)
-
-    async def _handle_probe_test(self) -> None:
-        await self.websocket_handler.send_moonraker_request("printer.gcode.script", {"script": "QUERY_PROBE"})
-        response = f"{Template(PROBE_TEST_TEMPLATE).render(**self.websocket_handler.latest_values)}\nok"
-        self.send_to_tft(message=response)
-
-    async def _handle_servo_command(self, position: int) -> None:
-        if "bltouch" in self.websocket_handler.latest_values.get("configfile", {}).get("settings", {}):
-            value = {
-                10: "pin_down",
-                90: "pin_up",
-                160: "reset"
-            }.get(position)
-            command = f"BLTOUCH_DEBUG COMMAND={value}"
-        else:
-            value = {
-                10: "1",
-                90: "0",
-                160: "0"
-            }.get(position)
-            command = f"SET_PIN PIN=_probe_enable VALUE={value}"
-        response = await self.websocket_handler.send_moonraker_request("printer.gcode.script", {"script": command})
-        self.send_to_tft(message=response)
-
-    def _run_tft_M280(self, arg_s: int) -> None:
-        position = arg_s
-        if position == 120:  # Test
-            self.event_loop.create_task(self._handle_probe_test())
-        else:
-            self.event_loop.create_task(self._handle_servo_command(position))
 
     async def _process_gcode_queue(self) -> None:
         while self.gc_queue:
@@ -625,6 +596,27 @@ class TFTAdapter:
         else:
             raise TFTError("Cannot pause, printer is not printing")
 
+    def _prepare_M280(self, args: List[str]) -> None:
+        position = args[1]
+        if position == "S120":  # Test
+            return "QUERY_PROBE"
+        else:
+            if self.bltouch:
+                value = {
+                    "S10": "pin_down",
+                    "S90": "pin_up",
+                    "S160": "reset"
+                }.get(position)
+                cmd = f"BLTOUCH_DEBUG COMMAND={value}"
+            else:
+                value = {
+                    "S10": "1",
+                    "S90": "0",
+                    "S160": "0"
+                }.get(position)
+                cmd = f"SET_PIN PIN=_probe_enable VALUE={value}"
+            return cmd
+
     def _prepare_print_file(self, args: List[str]) -> str:
         filename = self._clean_filename(args[0])
         # Escape existing double quotes in the file name
@@ -667,14 +659,23 @@ class TFTAdapter:
     def handle_gcode_response(self, response: str) -> None:
         # Only queue up "non-trivial" gcode responses.  At the
         # moment we'll handle state changes and errors
-        if "Klipper state" in response \
-                or response.startswith('!!'):
-            self.last_gcode_response = response
-        else:
-            for key in self.non_trivial_keys:
-                if key in response:
-                    self.last_gcode_response = response
-                    return
+        if "// Sending" not in response:
+            if "Klipper state" in response \
+                    or response.startswith('!!'):
+                self.last_gcode_response = response
+            elif response.startswith('//'):
+                message = response[3:]
+                if "probe: open" in message:
+                    response = f"{Template(PROBE_TEST_TEMPLATE).render(**self.printer_state)}\nok"
+                    logging.info(f"response: {response}")
+                    self.write_response(response)
+                else:
+                    self.write_response(error=message)
+            else:
+                for key in self.non_trivial_keys:
+                    if key in response:
+                        self.last_gcode_response = response
+                        return
 
     def write_response(self, message=None, command=None, action=None, error=None) -> None:
         if message:
