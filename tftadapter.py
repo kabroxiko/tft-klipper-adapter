@@ -242,7 +242,6 @@ class TFTAdapter:
         self.event_loop = self.server.get_event_loop()
         self.file_manager: FMComp = self.server.lookup_component('file_manager')
         self.klippy_apis: APIComp = self.server.lookup_component('klippy_apis')
-        self.kinematics: str = "none"
         self.machine_name = config.get('machine_name', "Klipper")
         self.firmware_name: str = "Repetier | Klipper"
         self.last_message: Optional[str] = None
@@ -257,6 +256,7 @@ class TFTAdapter:
         # Initialize tracked state.
         kconn: KlippyConnection = self.server.lookup_component("klippy_connection")
         self.printer_state: Dict[str, Dict[str, Any]] = kconn.get_subscription_cache()
+        self.config = {}
         self.extruder_count: int = 0
         self.heaters: List[str] = []
         self.is_ready: bool = False
@@ -388,18 +388,12 @@ class TFTAdapter:
             break
 
         self.firmware_name = "Repetier | Klipper " + printer_info['software_version']
-        config: Dict[str, Any] = cfg_status.get('configfile', {}).get('config', {})
-        printer_cfg: Dict[str, Any] = config.get('printer', {})
-        self.kinematics = printer_cfg.get('kinematics', "none")
-        self.printer: Dict[str, Any] = config.get('printer', {})
-        self.bltouch: Dict[str, Any] = config.get('bltouch', {})
-        self.bed_mesh: Dict[str, Any] = config.get('bed_mesh', {})
+        self.config: Dict[str, Any] = cfg_status.get('configfile', {}).get('config', {})
 
         logging.info(
             f"TFT Config Received:\n"
             f"Firmware Name: {self.firmware_name}\n"
-            f"Kinematics: {self.kinematics}\n"
-            f"Printer Config: {config}\n")
+            f"Printer Config: {self.config}\n")
 
         # Make subscription request
         sub_args: Dict[str, Optional[List[str]]] = {
@@ -418,7 +412,7 @@ class TFTAdapter:
         self.extruder_count = 0
         self.heaters = []
         extruders = []
-        for cfg in config:
+        for cfg in self.config:
             if cfg.startswith("extruder"):
                 self.extruder_count += 1
                 extruders.append(cfg)
@@ -948,9 +942,7 @@ class TFTAdapter:
         report = Template(REPORT_SETTINGS_TEMPLATE).render(
             **(
                 self.printer_state |
-                {"printer": self.printer} |
-                {"bltouch": self.bltouch} |
-                {"bed_mesh": self.bed_mesh}
+                self.config
             )
         )
         self.write_response(f"{report}\nok")
