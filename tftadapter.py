@@ -329,6 +329,7 @@ class TFTAdapter:
             'M524': self._cancel_print,
             'M701': self._load_filament,
             'M702': self._unload_filament,
+            'T0': self._send_ok_response,
         }
 
         self.report_gcodes: Dict[str, str] = {
@@ -356,6 +357,13 @@ class TFTAdapter:
             'M290': self._prepare_set_gcode_offset,
             'M420': self._prepare_set_bed_leveling,
             'M999': lambda args: "FIRMWARE_RESTART",
+        }
+
+        self.standard_gcodes: List[str] = {
+            'G28',
+            'G90',
+            'M104',
+            'M140',
         }
 
     async def component_init(self) -> None:
@@ -507,6 +515,8 @@ class TFTAdapter:
         if gcode in self.special_gcodes:
             sgc_func = self.special_gcodes[gcode]
             script = sgc_func(parts[1:])
+        elif gcode in self.standard_gcodes:
+            script = line
         else:
             logging.warning(f"Unregistered command: {line}")
             script = line
@@ -667,12 +677,18 @@ class TFTAdapter:
     def handle_gcode_response(self, response: str) -> None:
         # Only queue up "non-trivial" gcode responses.  At the
         # moment we'll handle state changes and errors
+        logging.info(f"response: {response}")
         if "// Sending" not in response:
             if "Klipper state" in response \
                     or response.startswith('!!'):
                 self.last_gcode_response = response
+            elif response.startswith('echo: Adjusted Print Time'):
+                timeleft = response.split('echo: Adjusted Print Time')[-1].strip()
+                hours, minutes = timeleft.split('hr')
+                minutes = minutes.strip().replace('min', '')
+                formatted_timeleft = f"{hours}h{minutes}m00s"
+                self.write_response(action=f"notification Time Left {formatted_timeleft}")
             elif response.startswith('//'):
-                logging.info(f"response: {response}")
                 message = response[3:]
                 if "probe: open" in message:
                     response = f"{Template(PROBE_TEST_TEMPLATE).render(**self.printer_state)}\nok"
