@@ -351,6 +351,7 @@ class TFTAdapter:
             'M280': self._prepare_probe_command,
             'M290': self._prepare_set_gcode_offset,
             'M420': self._prepare_set_bed_leveling,
+            'M500': lambda args: ["Z_OFFSET_APPLY_PROBE", "SAVE_CONFIG"],
             'M999': lambda args: "FIRMWARE_RESTART",
         }
 
