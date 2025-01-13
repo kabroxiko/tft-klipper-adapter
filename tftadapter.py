@@ -129,11 +129,6 @@ FILE_LIST_TEMPLATE = (
     "End file list\nok"
 )
 
-FILE_SELECT_TEMPLATE = (
-    "File opened:{{ filename }} Size:{{ size }}\n"
-    "File selected"
-)
-
 PROBE_ACCURACY_TEMPLATE = (
     "Mean: {{ avg_val }} Min: {{ min_val }} Max: {{ max_val }} Range: {{ range_val }}\n"
     "Standard Deviation: {{ stddev_val }}\n"
@@ -582,12 +577,7 @@ class TFTAdapter:
         return filename
 
     def _prepare_select_sd_file(self, args: List[str]) -> str:
-        filename = self._clean_filename(args[0])
-        self.current_file = filename
-        file_metadata = self.file_manager.get_file_metadata(filename)
-        size = file_metadata.get('size', 0)
-        response = Template(FILE_SELECT_TEMPLATE).render(filename=filename, size=size)
-        self.write_response(f"{response}\nok")
+        self.current_file = self._clean_filename(args[0])
         return f"M23 {self.current_file}"
 
     def _prepare_start_print(self, args: List[str]) -> str:
@@ -675,6 +665,8 @@ class TFTAdapter:
             if "Klipper state" in response \
                     or response.startswith('!!'):
                 self.write_response(action=f"notification {response}")
+            elif response.startswith('File opened:') or response.startswith('File selected'):
+                self.write_response(response)
             elif response.startswith('echo: Adjusted Print Time'):
                 timeleft = response.split('echo: Adjusted Print Time')[-1].strip()
                 hours, minutes = timeleft.split('hr')
