@@ -698,6 +698,17 @@ class TFTAdapter:
                     self.write_response(error=message)
             elif response.startswith('ok'):
                 self.write_response(response)
+            elif "B:" in response and "T0:" in response:
+                parts = response.split()
+                bed_temp = float(parts[0].split(":")[1])
+                bed_target = float(parts[1].split("/")[1])
+                extruder_temp = float(parts[2].split(":")[1])
+                extruder_target = float(parts[3].split("/")[1])
+                temperature_response = Template(TEMPERATURE_TEMPLATE).render(
+                    extruder={"temperature": extruder_temp, "target": extruder_target},
+                    heater_bed={"temperature": bed_temp, "target": bed_target}
+                )
+                self.write_response(f"ok {temperature_response}")
             else:
                 logging.info(f"Untreated response: {response}")
 
