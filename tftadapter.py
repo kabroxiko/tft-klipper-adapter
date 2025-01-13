@@ -245,7 +245,6 @@ class TFTAdapter:
         self.machine_name = config.get('machine_name', "Klipper")
         self.firmware_name: str = "Repetier | Klipper"
         self.last_message: Optional[str] = None
-        self.last_gcode_response: Optional[str] = None
         self.current_file: str = ""
         self.file_metadata: Dict[str, Any] = {}
         self.enable_checksum = config.getboolean('enable_checksum', True)
@@ -325,6 +324,8 @@ class TFTAdapter:
             'M201': self._set_acceleration,
             'M203': self._set_velocity,
             'M206': self._set_gcode_offset,
+            'M220': self._set_feed_rate,
+            'M221': self._set_flow_rate,
             'M503': self._report_settings,
             'M524': self._cancel_print,
             'M701': self._load_filament,
@@ -337,8 +338,6 @@ class TFTAdapter:
             'M114': POSITION_TEMPLATE,
             'M115': FIRMWARE_INFO_TEMPLATE,
             'M211': SOFTWARE_ENDSTOPS_TEMPLATE,
-            'M220': FEED_RATE_TEMPLATE,
-            'M221': FLOW_RATE_TEMPLATE,
         }
 
         # These gcodes require special parsing or handling prior to being
@@ -531,7 +530,7 @@ class TFTAdapter:
                     result = await self.klippy_apis.do_restart(script)
                 else:
                     result = await self.klippy_apis.run_gcode(script)
-                logging.info(f"Result: {result}")
+                self.handle_gcode_response(result)
             except self.server.error:
                 msg = f"Error executing script {script}"
                 self.handle_gcode_response("!! " + msg)
@@ -667,16 +666,15 @@ class TFTAdapter:
             else:
                 return "BED_MESH_PROFILE LOAD=default"
         except (IndexError, ValueError):
-            self.write_response("!! Invalid M420 command")
+            self.write_response(error="Invalid M420 command")
 
     def handle_gcode_response(self, response: str) -> None:
         # Only queue up "non-trivial" gcode responses.  At the
         # moment we'll handle state changes and errors
-        logging.info(f"response: {response}")
         if "// Sending" not in response:
             if "Klipper state" in response \
                     or response.startswith('!!'):
-                self.last_gcode_response = response
+                self.write_response(action=f"notification {response}")
             elif response.startswith('echo: Adjusted Print Time'):
                 timeleft = response.split('echo: Adjusted Print Time')[-1].strip()
                 hours, minutes = timeleft.split('hr')
@@ -706,11 +704,10 @@ class TFTAdapter:
                     self.write_response(marlin_response)
                 elif "Unknown command" in message:
                     self.write_response(error=message)
+            elif response.startswith('ok'):
+                self.write_response(response)
             else:
-                for key in self.non_trivial_keys:
-                    if key in response:
-                        self.last_gcode_response = response
-                        return
+                logging.info(f"Untreated response: {response}")
 
     def write_response(self, message=None, command=None, action=None, error=None) -> None:
         if command:
@@ -866,7 +863,7 @@ class TFTAdapter:
     def _select_sd_file(self, arg_p: Optional[str] = None) -> None:
         filename: Optional[str] = arg_p
         if filename is None:
-            self.write_response("!! Missing filename\nok")
+            self.write_response(error="Missing filename\nok")
             return
 
         # Clean up the filename
@@ -896,7 +893,7 @@ class TFTAdapter:
                     self.temperature_report_task = None
                 self.write_response("ok")
         except (IndexError, ValueError):
-            self.write_response("!! Invalid M155 command")
+            self.write_response(error="Invalid M155 command")
 
     def _set_position_report(self, arg_s: int) -> None:
         try:
@@ -913,7 +910,7 @@ class TFTAdapter:
                     self.position_report_task = None
                 self.write_response("ok")
         except (IndexError, ValueError):
-            self.write_response("!! Invalid M154 command")
+            self.write_response(error="Invalid M154 command")
 
     def _set_print_status_report(self, arg_s: int) -> None:
         try:
@@ -930,7 +927,7 @@ class TFTAdapter:
                     self.position_report_task = None
                 self.write_response("ok")
         except (IndexError, ValueError):
-            self.write_response("!! Invalid M27 command")
+            self.write_response(error="Invalid M27 command")
 
     def _report_software_endstops(self) -> str:
         filament_sensor_enabled = self.printer_state.get("filament_switch_sensor filament_sensor", {}).get("enabled", False)
@@ -983,7 +980,7 @@ class TFTAdapter:
             self.queue_gcode(command)
             self.write_response("ok")
         else:
-            self.write_response("!! Invalid M201 command")
+            self.write_response(error="Invalid M201 command")
 
     def _set_velocity(self, **params_dict: Any) -> None:
         if any(key in params_dict for key in ("X", "Y")):
@@ -992,7 +989,7 @@ class TFTAdapter:
             self.queue_gcode(command)
             self.write_response("ok")
         else:
-            self.write_response("!! Invalid M203 command")
+            self.write_response(error="Invalid M203 command")
 
     def _set_gcode_offset(self, **params_dict: Any) -> None:
         if any(key in params_dict for key in ("X", "Y", "Z", "E")):
@@ -1001,7 +998,7 @@ class TFTAdapter:
             self.queue_gcode(command)
             self.write_response("ok")
         else:
-            self.write_response("!! Invalid M206 command")
+            self.write_response(error="Invalid M206 command")
 
     def _load_filament(self) -> str:
         params = {
@@ -1063,6 +1060,18 @@ class TFTAdapter:
         for i, gc in enumerate(self.debug_queue):
             msg += f"\nSequence {i}: {gc}"
         logging.debug(msg)
+
+    def _set_feed_rate(self, arg_p: Optional[int] = None, arg_s: Optional[int] = None) -> None:
+        if arg_s is not None:
+            self.queue_gcode(f"M220 S{arg_s}")
+        else:
+            self.write_response(Template(f"{FEED_RATE_TEMPLATE}\nok").render(**self.printer_state))
+
+    def _set_flow_rate(self, arg_p: Optional[int] = None, arg_s: Optional[int] = None) -> None:
+        if arg_s is not None:
+            self.queue_gcode(f"M221 S{arg_s}")
+        else:
+            self.write_response(Template(f"{FLOW_RATE_TEMPLATE}\nok").render(**self.printer_state))
 
 def load_component(config: ConfigHelper) -> TFT:
     return TFTAdapter(config)
