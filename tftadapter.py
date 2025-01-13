@@ -325,6 +325,7 @@ class TFTAdapter:
             'M524': self._cancel_print,
             'M701': self._load_filament,
             'M702': self._unload_filament,
+            'M851': self._set_probe_offset,
             'T0': self._send_ok_response,
         }
 
@@ -356,6 +357,7 @@ class TFTAdapter:
         self.standard_gcodes: List[str] = {
             'G28',
             'G90',
+            'M84',
             'M104',
             'M106',
             'M140',
@@ -998,6 +1000,16 @@ class TFTAdapter:
             self.write_response("ok")
         else:
             self.write_response(error="Invalid M206 command")
+
+    def _set_probe_offset(self, **params_dict: Any) -> None:
+        if any(key in params_dict for key in ("X", "Y", "Z")):
+            offsets = " ".join(f"{axis}_OFFSET={value}" for axis, value in params_dict.items() if axis in ("X", "Y", "Z"))
+            command = f"SET_GCODE_OFFSET {offsets}"
+            self.queue_gcode(command)
+            self.write_response("ok")
+        else:
+            response = Template(PROBE_OFFSET_TEMPLATE).render(**(self.printer_state|self.config))
+            self.write_response(f"{response}\nok")
 
     def _load_filament(self) -> str:
         params = {
