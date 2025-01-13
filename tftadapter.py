@@ -659,58 +659,54 @@ class TFTAdapter:
             self.write_response(error="Invalid M420 command")
 
     def handle_gcode_response(self, response: str) -> None:
-        # Only queue up "non-trivial" gcode responses.  At the
-        # moment we'll handle state changes and errors
-        if "// Sending" not in response:
-            if "Klipper state" in response \
-                    or response.startswith('!!'):
-                self.write_response(action=f"notification {response}")
-            elif response.startswith('File opened:') or response.startswith('File selected'):
+        if "// Sending" in response:
+            return
+
+        if "Klipper state" in response or response.startswith('!!'):
+            self.write_response(action=f"notification {response}")
+        elif response.startswith('File opened:') or response.startswith('File selected') or response.startswith('ok'):
+            self.write_response(response)
+        elif response.startswith('echo: Adjusted Print Time'):
+            timeleft = response.split('echo: Adjusted Print Time')[-1].strip()
+            hours, minutes = timeleft.split('hr')
+            minutes = minutes.strip().replace('min', '')
+            formatted_timeleft = f"{hours}h{minutes}m00s"
+            self.write_response(action=f"notification Time Left {formatted_timeleft}")
+        elif response.startswith('//'):
+            message = response[3:]
+            if "probe: open" in message:
+                response = f"{Template(PROBE_TEST_TEMPLATE).render(**self.printer_state)}\nok"
                 self.write_response(response)
-            elif response.startswith('echo: Adjusted Print Time'):
-                timeleft = response.split('echo: Adjusted Print Time')[-1].strip()
-                hours, minutes = timeleft.split('hr')
-                minutes = minutes.strip().replace('min', '')
-                formatted_timeleft = f"{hours}h{minutes}m00s"
-                self.write_response(action=f"notification Time Left {formatted_timeleft}")
-            elif response.startswith('//'):
-                message = response[3:]
-                if "probe: open" in message:
-                    response = f"{Template(PROBE_TEST_TEMPLATE).render(**self.printer_state)}\nok"
-                    self.write_response(response)
-                elif "probe accuracy results:" in message:
-                    # Convert probe accuracy results to Marlin format
-                    parts = message.split(',')
-                    max_val = parts[0].split()[-1]
-                    min_val = parts[1].split()[-1]
-                    range_val = parts[2].split()[-1]
-                    avg_val = parts[3].split()[-1]
-                    stddev_val = parts[5].split()[-1]
-                    marlin_response = Template(PROBE_ACCURACY_TEMPLATE).render(
-                        max_val=max_val,
-                        min_val=min_val,
-                        range_val=range_val,
-                        avg_val=avg_val,
-                        stddev_val=stddev_val
-                    )
-                    self.write_response(marlin_response)
-                elif "Unknown command" in message:
-                    self.write_response(error=message)
-            elif response.startswith('ok'):
-                self.write_response(response)
-            elif "B:" in response and "T0:" in response:
-                parts = response.split()
-                bed_temp = float(parts[0].split(":")[1])
-                bed_target = float(parts[1].split("/")[1])
-                extruder_temp = float(parts[2].split(":")[1])
-                extruder_target = float(parts[3].split("/")[1])
-                temperature_response = Template(TEMPERATURE_TEMPLATE).render(
-                    extruder={"temperature": extruder_temp, "target": extruder_target},
-                    heater_bed={"temperature": bed_temp, "target": bed_target}
+            elif "probe accuracy results:" in message:
+                parts = message.split(',')
+                max_val = parts[0].split()[-1]
+                min_val = parts[1].split()[-1]
+                range_val = parts[2].split()[-1]
+                avg_val = parts[3].split()[-1]
+                stddev_val = parts[5].split()[-1]
+                marlin_response = Template(PROBE_ACCURACY_TEMPLATE).render(
+                    max_val=max_val,
+                    min_val=min_val,
+                    range_val=range_val,
+                    avg_val=avg_val,
+                    stddev_val=stddev_val
                 )
-                self.write_response(f"ok {temperature_response}")
-            else:
-                logging.info(f"Untreated response: {response}")
+                self.write_response(marlin_response)
+            elif "Unknown command" in message:
+                self.write_response(error=message)
+        elif "B:" in response and "T0:" in response:
+            parts = response.split()
+            bed_temp = float(parts[0].split(":")[1])
+            bed_target = float(parts[1].split("/")[1])
+            extruder_temp = float(parts[2].split(":")[1])
+            extruder_target = float(parts[3].split("/")[1])
+            temperature_response = Template(TEMPERATURE_TEMPLATE).render(
+                extruder={"temperature": extruder_temp, "target": extruder_target},
+                heater_bed={"temperature": bed_temp, "target": bed_target}
+            )
+            self.write_response(f"ok {temperature_response}")
+        else:
+            logging.info(f"Untreated response: {response}")
 
     def write_response(self, message=None, command=None, action=None, error=None) -> None:
         if command:
