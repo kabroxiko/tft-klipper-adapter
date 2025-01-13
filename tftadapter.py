@@ -105,7 +105,8 @@ SOFTWARE_ENDSTOPS_TEMPLATE = (
 )
 
 PROBE_TEST_TEMPLATE = (
-    "echo:Last query: {{ probe.last_query }} Last Z result: {{ probe.last_z_result }}"
+    "Last query: {{ probe.last_query }}\n"
+    "Last Z result: {{ probe.last_z_result }}"
 )
 
 POSITION_TEMPLATE = (
@@ -457,21 +458,21 @@ class TFTAdapter:
         self.write_response(
             {'beep_freq': frequency, 'beep_length': duration})
 
-    def process_line(self, command: str) -> None:
-        logging.info(f"command: {command}")
-        self.debug_queue.append(command)
+    def process_line(self, line: str) -> None:
+        logging.info(f"line: {line}")
+        self.debug_queue.append(line)
         # If we find M112 in the line then skip verification
-        if "M112" in command.upper():
+        if "M112" in line.upper():
             self.event_loop.register_callback(self.klippy_apis.emergency_stop)
             return
 
-        script = command
+        script = line
         # Execute the gcode.  Check for special RRF gcodes that
         # require special handling
-        parts = command.split()
+        parts = line.split()
         gcode = parts[0].strip()
         if gcode in ["M23", "M30", "M32", "M36", "M37"]:
-            arg = command[len(gcode):].strip()
+            arg = line[len(gcode):].strip()
             parts = [gcode, arg]
 
         # Check for commands that query state and require immediate response
@@ -484,9 +485,9 @@ class TFTAdapter:
                 arg = part[0].lower()
                 try:
                     val = int(part[1:].strip()) if arg in "sr" \
-                        else part[1:].strip(" \"\t\n")
+                        else part[1:].trip(" \"\t\n")
                 except Exception:
-                    msg = f"tft: Error parsing direct gcode {command}"
+                    msg = f"tft: Error parsing direct gcode {line}"
                     self.handle_gcode_response("!! " + msg)
                     logging.exception(msg)
                     return
@@ -507,11 +508,11 @@ class TFTAdapter:
             sgc_func = self.special_gcodes[gcode]
             script = sgc_func(parts[1:])
         else:
-            logging.warning(f"Unregistered command: {command}")
-            script = command
+            logging.warning(f"Unregistered command: {line}")
+            script = line
 
         if not script:
-            logging.warning(f"No script generated for command: {command}")
+            logging.warning(f"No script generated for command: {line}")
             return
 
         self.queue_gcode(script)
@@ -671,10 +672,10 @@ class TFTAdapter:
                     or response.startswith('!!'):
                 self.last_gcode_response = response
             elif response.startswith('//'):
+                logging.info(f"response: {response}")
                 message = response[3:]
                 if "probe: open" in message:
                     response = f"{Template(PROBE_TEST_TEMPLATE).render(**self.printer_state)}\nok"
-                    logging.info(f"response: {response}")
                     self.write_response(response)
                 elif "probe accuracy results:" in message:
                     # Convert probe accuracy results to Marlin format
@@ -692,7 +693,7 @@ class TFTAdapter:
                         stddev_val=stddev_val
                     )
                     self.write_response(marlin_response)
-                else:
+                elif "Unknown command" in message:
                     self.write_response(error=message)
             else:
                 for key in self.non_trivial_keys:
@@ -701,17 +702,17 @@ class TFTAdapter:
                         return
 
     def write_response(self, message=None, command=None, action=None, error=None) -> None:
-        if message:
-            msg = f'{message}'
-        elif command:
+        if command:
             msg = f'{command}'
         elif action:
             msg = f'//action:{action}'
         elif error:
             msg = f'Error:{error}'
+        else:
+            msg = f'{message}'
 
-        message = msg.replace('\n', '\\n')
-        logging.info(f"response: {message}")
+        formatted_msg = msg.replace('\n', '\\n')
+        logging.info(f"response: {formatted_msg}")
         byte_resp = (msg + "\n").encode("utf-8")
         self.ser_conn.send(byte_resp)
 
@@ -1027,7 +1028,7 @@ class TFTAdapter:
         Handle the M48 command to probe the bed and report the results.
         Convert parameters from Marlin format to Klipper format.
         """
-        cmd = "G28\nPROBE_ACCURACY"
+        cmd = "PROBE_ACCURACY"
         param_map = {
             'P': 'SAMPLES',
             'S': 'SAMPLE_RETRACT_DIST',
