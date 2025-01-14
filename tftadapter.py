@@ -306,7 +306,6 @@ class TFTAdapter:
             'M20': self._list_sd_files,
             'M21': self._init_sd_card,
             'M27': self._set_print_status_report,
-            'G29': self._calibrate_bed_mesh,
             'M30': self._delete_sd_file,
             'M33': self._select_sd_file,
             'M36': self._get_sd_file_info,
@@ -340,6 +339,7 @@ class TFTAdapter:
             'M25': self._prepare_pause_print,
             'M32': self._prepare_print_file,
             'M48': self._prepare_probe_bed,
+            'G29': lambda args: ["BED_MESH_CLEAR", "BED_MESH_CALIBRATE PROFILE=default"],
             'M120': lambda args: "SAVE_GCODE_STATE STATE=TFT",
             'M150': self._prepare_set_led,
             'M121': lambda args: "RESTORE_GCODE_STATE STATE=TFT",
@@ -351,6 +351,7 @@ class TFTAdapter:
         }
 
         self.standard_gcodes: List[str] = {
+            'G0',
             'G28',
             'G90',
             'M84',
@@ -480,7 +481,7 @@ class TFTAdapter:
                 arg = part[0].lower()
                 try:
                     val = int(part[1:].strip()) if arg in "sr" \
-                        else part[1:].trip(" \"\t\n")
+                        else part[1:].strip(" \"\t\n")
                 except Exception:
                     msg = f"tft: Error parsing direct gcode {line}"
                     self.handle_gcode_response("!! " + msg)
@@ -513,10 +514,9 @@ class TFTAdapter:
             logging.info(f"script: {script}")
             try:
                 if script in RESTART_GCODES:
-                    result = await self.klippy_apis.do_restart(script)
+                    await self.klippy_apis.do_restart(script)
                 else:
-                    result = await self.klippy_apis.run_gcode(script)
-                self.handle_gcode_response(result)
+                    await self.klippy_apis.run_gcode(script)
             except self.server.error:
                 msg = f"Error executing script {script}"
                 self.handle_gcode_response("!! " + msg)
@@ -954,14 +954,6 @@ class TFTAdapter:
             self.write_response(action="notification remote resume")
         else:
             self.write_response(message=f"echo:{arg_p}\nok" if arg_p else "ok")
-
-    def _calibrate_bed_mesh(self, *args: str) -> str:
-        self.queue_gcode("BED_MESH_CLEAR")
-        cmd = "BED_MESH_CALIBRATE"
-        if args:
-            cmd += " " + " ".join(args)
-        self.queue_gcode(cmd)
-        self.write_response(message="ok")
 
     def _set_acceleration(self, **params_dict: Any) -> None:
         if any(key in params_dict for key in ("X", "Y")):
