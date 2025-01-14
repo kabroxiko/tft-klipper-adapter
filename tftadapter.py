@@ -312,13 +312,17 @@ class TFTAdapter:
             'M36': self._get_sd_file_info,
             'M82': self._send_ok_response,
             'M92': self._send_ok_response,
+            'M105': self._report_temperature,
             'M108': self._send_ok_response,
+            'M114': self._report_position,
+            'M115': self._report_firmware_info,
             'M118': self._handle_m118_command,
             'M154': self._set_position_report,
             'M155': self._set_temperature_report,
             'M201': self._set_acceleration,
             'M203': self._set_velocity,
             'M206': self._set_gcode_offset,
+            'M211': self._report_software_endstops,
             'M220': self._set_feed_rate,
             'M221': self._set_flow_rate,
             'M503': self._report_settings,
@@ -329,15 +333,6 @@ class TFTAdapter:
             'T0': self._send_ok_response,
         }
 
-        self.report_gcodes: Dict[str, str] = {
-            'M105': TEMPERATURE_TEMPLATE,
-            'M114': POSITION_TEMPLATE,
-            'M115': FIRMWARE_INFO_TEMPLATE,
-            'M211': SOFTWARE_ENDSTOPS_TEMPLATE,
-        }
-
-        # These gcodes require special parsing or handling prior to being
-        # sent via Klippy's "gcode/script" api command.
         self.special_gcodes: Dict[str, Callable[[List[str]], str]] = {
             'M0': lambda args: "CANCEL_PRINT",
             'M23': self._prepare_select_sd_file,
@@ -494,13 +489,6 @@ class TFTAdapter:
                 params[f"arg_{arg}"] = val
             func = self.direct_gcodes[gcode]
             self.queue_command(func, **params)
-            return
-
-        # Check for report gcodes
-        if gcode in self.report_gcodes:
-            template = self.report_gcodes[gcode]
-            report = Template(template).render(**self.printer_state)
-            self.write_response(f"{report}\nok")
             return
 
         # Prepare GCodes that require special handling
@@ -1084,6 +1072,23 @@ class TFTAdapter:
             self.queue_gcode(f"M221 S{arg_s}")
         else:
             self.write_response(Template(f"{FLOW_RATE_TEMPLATE}\nok").render(**self.printer_state))
+
+    def _report_temperature(self) -> None:
+        report = Template(TEMPERATURE_TEMPLATE).render(**self.printer_state)
+        self.write_response(f"{report}\nok")
+
+    def _report_position(self) -> None:
+        report = Template(POSITION_TEMPLATE).render(**self.printer_state)
+        self.write_response(f"{report}\nok")
+
+    def _report_firmware_info(self) -> None:
+        report = Template(FIRMWARE_INFO_TEMPLATE).render(**self.printer_state)
+        self.write_response(f"{report}\nok")
+
+    def _report_software_endstops(self) -> None:
+        state = {"state": "On" if self.printer_state.get("filament_switch_sensor filament_sensor", {}).get("enabled", False) else "Off"}
+        report = Template(SOFTWARE_ENDSTOPS_TEMPLATE).render(**state)
+        self.write_response(f"{report}\nok")
 
 def load_component(config: ConfigHelper) -> TFT:
     return TFTAdapter(config)
