@@ -318,16 +318,10 @@ class TFTAdapter:
             'M118': self._handle_m118_command,
             'M154': self._set_position_report,
             'M155': self._set_temperature_report,
-            'M201': self._set_acceleration,
-            'M203': self._set_velocity,
-            'M206': self._set_gcode_offset,
             'M211': self._report_software_endstops,
             'M220': self._set_feed_rate,
             'M221': self._set_flow_rate,
             'M503': self._report_settings,
-            'M524': self._cancel_print,
-            'M701': self._load_filament,
-            'M702': self._unload_filament,
             'M851': self._set_probe_offset,
             'T0': self._send_ok_response,
         }
@@ -343,10 +337,16 @@ class TFTAdapter:
             'M120': lambda args: "SAVE_GCODE_STATE STATE=TFT",
             'M150': self._prepare_set_led,
             'M121': lambda args: "RESTORE_GCODE_STATE STATE=TFT",
+            'M201': self._prepare_set_acceleration,
+            'M203': self._prepare_set_velocity,
+            'M206': self._prepare_set_gcode_offset,
             'M280': self._prepare_probe_command,
             'M290': self._prepare_set_gcode_offset,
             'M420': self._prepare_set_bed_leveling,
             'M500': lambda args: ["Z_OFFSET_APPLY_PROBE", "SAVE_CONFIG"],
+            'M524': lambda args: "CANCEL_PRINT",
+            'M701': self._prepare_load_filament,
+            'M702': self._prepare_unload_filament,
             'M999': lambda args: "FIRMWARE_RESTART",
         }
 
@@ -714,7 +714,7 @@ class TFTAdapter:
         byte_resp = (msg + "\n").encode("utf-8")
         self.ser_conn.send(byte_resp)
 
-    async def send_to_btt(self, command=None, action=None, message=None, error=None):
+    async def send_to_btt(self, message=None, command=None, action=None, error=None):
         if command:
             self.serial_handler.write(f'M118 {command}')
         elif action:
@@ -737,7 +737,7 @@ class TFTAdapter:
             await asyncio.sleep(interval)
 
     def _init_sd_card(self) -> str:
-        self.write_response(message="SD card ok\nok")
+        self.write_response("SD card ok\nok")
 
     def _list_sd_files(self, arg_p: Optional[str] = None) -> None:
         response_type = 2
@@ -938,12 +938,8 @@ class TFTAdapter:
     def _send_ok_response(self, arg_p: Optional[str] = None, arg_s: Optional[str] = None) -> str:
         self.write_response("ok")
 
-    def _cancel_print(self) -> str:
-        self.queue_gcode("CANCEL_PRINT")
-        self.write_response(message="ok")
-
     def _send_ok_response(self) -> str:
-        self.write_response(message="ok")
+        self.write_response("ok")
 
     def _handle_m118_command(self, arg_p: Optional[str] = None) -> str:
         if arg_p and "P0 A1 action:cancel" in arg_p:
@@ -953,46 +949,27 @@ class TFTAdapter:
         elif arg_p and "P0 A1 action:notification remote resume" in arg_p:
             self.write_response(action="notification remote resume")
         else:
-            self.write_response(message=f"echo:{arg_p}\nok" if arg_p else "ok")
+            self.write_response(f"echo:{arg_p}\nok" if arg_p else "ok")
 
-    def _set_acceleration(self, **params_dict: Any) -> None:
-        if any(key in params_dict for key in ("X", "Y")):
-            acceleration = int(params_dict.get('X', params_dict.get('Y', 0)))
-            command = f"SET_VELOCITY_LIMIT ACCEL={acceleration} ACCEL_TO_DECEL={acceleration / 2}"
-            self.queue_gcode(command)
-            self.write_response("ok")
-        else:
-            self.write_response(error="Invalid M201 command")
+    def _prepare_set_acceleration(self, arg_p: Optional[int] = None) -> None:
+        acceleration = int(arg_p[0][1:])
+        cmd = f"SET_VELOCITY_LIMIT ACCEL={acceleration} ACCEL_TO_DECEL={acceleration / 2}"
+        return cmd
 
-    def _set_velocity(self, **params_dict: Any) -> None:
-        if any(key in params_dict for key in ("X", "Y")):
-            velocity = int(params_dict.get('X', params_dict.get('Y', 0)))
-            command = f"SET_VELOCITY_LIMIT VELOCITY={velocity}"
-            self.queue_gcode(command)
-            self.write_response("ok")
-        else:
-            self.write_response(error="Invalid M203 command")
+    def _prepare_set_velocity(self, arg_p: Optional[int] = None) -> None:
+        velocity = int(arg_p[0][1:])
+        cmd = f"SET_VELOCITY_LIMIT VELOCITY={velocity}"
+        return cmd
 
-    def _set_gcode_offset(self, **params_dict: Any) -> None:
-        if any(key in params_dict for key in ("X", "Y", "Z", "E")):
-            offsets = " ".join(f"{axis}={value}" for axis, value in params_dict.items() if axis in ("X", "Y", "Z", "E"))
-            command = f"SET_GCODE_OFFSET {offsets}"
-            self.queue_gcode(command)
-            self.write_response("ok")
-        else:
-            self.write_response(error="Invalid M206 command")
+    def _prepare_set_gcode_offset(self, arg_p: Optional[str] = None) -> None:
+        offsets = " ".join(f"{arg[0]}={arg[1:]}" for arg in arg_p)
+        return f"SET_GCODE_OFFSET {offsets}"
 
-    def _set_probe_offset(self, **params_dict: Any) -> None:
-        if any(key in params_dict for key in ("X", "Y", "Z")):
-            offsets = " ".join(f"{axis}_OFFSET={value}" for axis, value in params_dict.items() if axis in ("X", "Y", "Z"))
-            command = f"SET_GCODE_OFFSET {offsets}"
-            self.queue_gcode(command)
-            self.write_response("ok")
-        else:
-            response = Template(PROBE_OFFSET_TEMPLATE).render(**(self.printer_state|self.config))
-            self.write_response(f"{response}\nok")
+    def _set_probe_offset(self, arg_p: Optional[str] = None) -> None:
+        response = Template(PROBE_OFFSET_TEMPLATE).render(**(self.printer_state|self.config))
+        self.write_response(f"{response}\nok")
 
-    def _load_filament(self) -> str:
+    def _prepare_load_filament(self) -> str:
         params = {
             "length": 25,
             "extruder": 0,
@@ -1000,7 +977,7 @@ class TFTAdapter:
         }
         return self._handle_filament(params)
 
-    def _unload_filament(self) -> str:
+    def _prepare_unload_filament(self) -> str:
         params = {
             "length": -25,
             "extruder": 0,
@@ -1008,18 +985,17 @@ class TFTAdapter:
         }
         return self._handle_filament(params)
 
-    def _handle_filament(self, params: Dict[str, Any]) -> str:
-        length = params.get("length")
-        extruder = params.get("extruder")
-        zmove = params.get("zmove")
+    def _handle_filament(self, args: Dict[str, Any]) -> str:
+        length = args.get("length")
+        extruder = args.get("extruder")
+        zmove = args.get("zmove")
         cmd = [
             "G91",               # Relative Positioning
             f"G92 E{extruder}",  # Reset Extruder
             f"G1 Z{zmove} E{length} F{3*60}",  # Extrude or Retract
             "G92 E0"              # Reset Extruder
         ]
-        self.queue_gcode(cmd)
-        self.write_response("ok")
+        return cmd
 
     def _prepare_probe_bed(self, args: List[str]) -> str:
         """
@@ -1039,7 +1015,7 @@ class TFTAdapter:
             else:
                 klipper_args.append(arg)
         if klipper_args:
-            cmd += " " + " ".join(klipper_args)
+            cmd += " " + "join(klipper_args)"
         return cmd
 
     def close(self) -> None:
