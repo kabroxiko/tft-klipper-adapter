@@ -11,6 +11,7 @@ import time
 import errno
 import logging
 import asyncio
+import re
 from jinja2 import Template
 from collections import deque
 from ..utils import ServerError
@@ -475,19 +476,21 @@ class TFTAdapter:
         if gcode in self.direct_gcodes:
             params: Dict[str, Any] = {}
             for part in parts[1:]:
-                if part[0] not in "PSR":
-                    params["arg_p"] = part.strip(" \"\t\n")
+                logging.info(f"part: {part}")
+                if not part[1:].isnumeric():
+                    if not params.get("arg_string"):
+                        params["arg_string"] = part
+                    else:
+                        params["arg_string"] = f'{params["arg_string"]} {part}'
                     continue
-                arg = part[0].lower()
-                try:
-                    val = int(part[1:].strip()) if arg in "sr" \
-                        else part[1:].strip(" \"\t\n")
-                except Exception:
-                    msg = f"tft: Error parsing direct gcode {line}"
-                    self.handle_gcode_response("!! " + msg)
-                    logging.exception(msg)
-                    return
-                params[f"arg_{arg}"] = val
+                else:
+                    arg = part[0].lower()
+                    if re.match(r'^-?\d+(?:\.\d+)$', arg):
+                        val = float(part[1:])
+                    else:
+                        val = int(part[1:])
+                    params[f"arg_{arg}"] = val
+            logging.info(f'params: {params}')
             func = self.direct_gcodes[gcode]
             self.queue_command(func, **params)
             return
@@ -739,7 +742,7 @@ class TFTAdapter:
     def _init_sd_card(self) -> str:
         self.write_response("SD card ok\nok")
 
-    def _list_sd_files(self, arg_p: Optional[str] = None) -> None:
+    def _list_sd_files(self, arg_string: Optional[str] = None) -> None:
         response_type = 2
         if response_type != 2:
             logging.info(
@@ -781,10 +784,10 @@ class TFTAdapter:
         marlin_response = Template(FILE_LIST_TEMPLATE).render(files=response['files'])
         self.write_response(marlin_response)
 
-    async def _delete_sd_file(self, arg_p: str = "") -> None:
+    async def _delete_sd_file(self, arg_string: str = "") -> None:
         # Delete a file.  Clean up the file name and make sure
         # it is relative to the "gcodes" root.
-        path = arg_p
+        path = arg_string
         path = path.strip('\"')
         if path.startswith("0:/"):
             path = path[3:]
@@ -795,9 +798,9 @@ class TFTAdapter:
             path = "gcodes/" + path
         await self.file_manager.delete_file(path)
 
-    def _get_sd_file_info(self, arg_p: Optional[str] = None) -> None:
+    def _get_sd_file_info(self, arg_string: Optional[str] = None) -> None:
         response: Dict[str, Any] = {}
-        filename: Optional[str] = arg_p
+        filename: Optional[str] = arg_string
         sd_status = self.printer_state.get("virtual_sdcard", {})
         print_stats = self.printer_state.get("print_stats", {})
         if filename is None:
@@ -850,8 +853,8 @@ class TFTAdapter:
             response['err'] = 1
         self.write_response(response)
 
-    def _select_sd_file(self, arg_p: Optional[str] = None) -> None:
-        filename: Optional[str] = arg_p
+    def _select_sd_file(self, arg_string: Optional[str] = None) -> None:
+        filename: Optional[str] = arg_string
         if filename is None:
             self.write_response(error="Missing filename\nok")
             return
@@ -935,37 +938,40 @@ class TFTAdapter:
         )
         self.write_response(f"{report}\nok")
 
-    def _send_ok_response(self, arg_p: Optional[str] = None, arg_s: Optional[str] = None) -> str:
+    def _send_ok_response(self, arg_string: Optional[str] = None, arg_s: Optional[str] = None) -> str:
         self.write_response("ok")
 
     def _send_ok_response(self) -> str:
         self.write_response("ok")
 
-    def _handle_m118_command(self, arg_p: Optional[str] = None) -> str:
-        if arg_p and "P0 A1 action:cancel" in arg_p:
-            self.write_response(action="cancel")
-        elif arg_p and "P0 A1 action:notification remote pause" in arg_p:
-            self.write_response(action="notification remote pause")
-        elif arg_p and "P0 A1 action:notification remote resume" in arg_p:
-            self.write_response(action="notification remote resume")
-        else:
-            self.write_response(f"echo:{arg_p}\nok" if arg_p else "ok")
+    def _handle_m118_command(self,
+                             arg_p: Optional[int] = None,
+                             arg_a: Optional[int] = None,
+                             arg_string: Optional[str] = None) -> str:
+        if arg_p == 0:
+            if arg_a == 1:
+                self.write_response(f"// {arg_string}")
+            else:
+                self.write_response(f"echo:{arg_string}\nok" if arg_string else "ok")
 
-    def _prepare_set_acceleration(self, arg_p: Optional[int] = None) -> None:
-        acceleration = int(arg_p[0][1:])
+    def _prepare_set_acceleration(self, arg_string: Optional[int] = None) -> None:
+        acceleration = int(arg_string[0][1:])
         cmd = f"SET_VELOCITY_LIMIT ACCEL={acceleration} ACCEL_TO_DECEL={acceleration / 2}"
         return cmd
 
-    def _prepare_set_velocity(self, arg_p: Optional[int] = None) -> None:
-        velocity = int(arg_p[0][1:])
+    def _prepare_set_velocity(self, arg_string: Optional[int] = None) -> None:
+        velocity = int(arg_string[0][1:])
         cmd = f"SET_VELOCITY_LIMIT VELOCITY={velocity}"
         return cmd
 
-    def _prepare_set_gcode_offset(self, arg_p: Optional[str] = None) -> None:
-        offsets = " ".join(f"{arg[0]}={arg[1:]}" for arg in arg_p)
+    def _prepare_set_gcode_offset(self, arg_string: Optional[str] = None) -> None:
+        offsets = " ".join(f"{arg[0]}={arg[1:]}" for arg in arg_string)
         return f"SET_GCODE_OFFSET {offsets}"
 
-    def _set_probe_offset(self, arg_p: Optional[str] = None) -> None:
+    def _set_probe_offset(self,
+                          arg_x: Optional[float] = None,
+                          arg_y: Optional[float] = None,
+                          arg_z: Optional[float] = None) -> None:
         response = Template(PROBE_OFFSET_TEMPLATE).render(**(self.printer_state|self.config))
         self.write_response(f"{response}\nok")
 
@@ -1029,13 +1035,13 @@ class TFTAdapter:
             msg += f"\nSequence {i}: {gc}"
         logging.debug(msg)
 
-    def _set_feed_rate(self, arg_p: Optional[int] = None, arg_s: Optional[int] = None) -> None:
+    def _set_feed_rate(self, arg_s: Optional[int] = None) -> None:
         if arg_s is not None:
             self.queue_gcode(f"M220 S{arg_s}")
         else:
             self.write_response(Template(f"{FEED_RATE_TEMPLATE}\nok").render(**self.printer_state))
 
-    def _set_flow_rate(self, arg_p: Optional[int] = None, arg_s: Optional[int] = None) -> None:
+    def _set_flow_rate(self, arg_s: Optional[int] = None) -> None:
         if arg_s is not None:
             self.queue_gcode(f"M221 S{arg_s}")
         else:
