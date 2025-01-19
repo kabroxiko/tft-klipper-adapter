@@ -304,6 +304,8 @@ class TFTAdapter:
         # These commands are directly executued on the server and do not to
         # make a request to Klippy
         self.direct_gcodes: Dict[str, FlexCallback] = {
+            'G26': self._send_ok_response, # G26 H240 B70 R99
+            'G30': self._send_ok_response, # G30 E1 X28 Y207
             'M20': self._list_sd_files,
             'M21': self._init_sd_card,
             'M27': self._set_print_status_report,
@@ -322,6 +324,7 @@ class TFTAdapter:
             'M211': self._report_software_endstops,
             'M220': self._set_feed_rate,
             'M221': self._set_flow_rate,
+            'M420': self._set_bed_leveling,
             'M503': self._report_settings,
             'M851': self._set_probe_offset,
             'T0': self._send_ok_response,
@@ -343,7 +346,6 @@ class TFTAdapter:
             'M206': self._prepare_set_gcode_offset,
             'M280': self._prepare_probe_command,
             'M290': self._prepare_set_gcode_offset,
-            'M420': self._prepare_set_bed_leveling,
             'M500': lambda args: ["Z_OFFSET_APPLY_PROBE", "SAVE_CONFIG"],
             'M524': lambda args: "CANCEL_PRINT",
             'M701': self._prepare_load_filament,
@@ -353,6 +355,7 @@ class TFTAdapter:
 
         self.standard_gcodes: List[str] = {
             'G0',
+            'G1',
             'G28',
             'G90',
             'M84',
@@ -642,15 +645,18 @@ class TFTAdapter:
         offset = args[0][1:].strip()
         return f"SET_GCODE_OFFSET Z_ADJUST={offset} MOVE=1"
 
-    def _prepare_set_bed_leveling(self, args: Optional[List[str]] = None) -> None:
-        try:
-            enable = int(args[0]) if args else 1
-            if enable == 0:
-                return "BED_MESH_CLEAR"
+    def _set_bed_leveling(self,
+                         arg_v: Optional[int] = None,
+                         arg_s: Optional[int] = None,
+                         arg_t: Optional[int] = None) -> None:
+        if arg_s:
+            if arg_s == 0:
+                self.queue_gcode("BED_MESH_CLEAR")
             else:
-                return "BED_MESH_PROFILE LOAD=default"
-        except (IndexError, ValueError):
-            self.write_response(error="Invalid M420 command")
+                self.queue_gcode("BED_MESH_PROFILE LOAD=default")
+        else:
+            # TODO: Falta implementar M420 V1 T1
+            self.write_response("ok")
 
     def handle_gcode_response(self, response: str) -> None:
         if "// Sending" in response:
@@ -872,55 +878,46 @@ class TFTAdapter:
         self.write_response(f"{filename}\nok")
 
     def _set_temperature_report(self, arg_s: int) -> None:
-        try:
-            interval = arg_s
-            if interval > 0:
-                if self.temperature_report_task:
-                    self.temperature_report_task.cancel()
-                self.temperature_report_task = self.event_loop.create_task(
-                    self.report(f"ok {TEMPERATURE_TEMPLATE}", interval)
-                )
-            else:
-                if self.temperature_report_task:
-                    self.temperature_report_task.cancel()
-                    self.temperature_report_task = None
-                self.write_response("ok")
-        except (IndexError, ValueError):
-            self.write_response(error="Invalid M155 command")
+        interval = arg_s
+        if interval > 0:
+            if self.temperature_report_task:
+                self.temperature_report_task.cancel()
+            self.temperature_report_task = self.event_loop.create_task(
+                self.report(f"ok {TEMPERATURE_TEMPLATE}", interval)
+            )
+        else:
+            if self.temperature_report_task:
+                self.temperature_report_task.cancel()
+                self.temperature_report_task = None
+            self.write_response("ok")
 
     def _set_position_report(self, arg_s: int) -> None:
-        try:
-            interval = arg_s
-            if interval > 0:
-                if self.position_report_task:
-                    self.position_report_task.cancel()
-                self.position_report_task = self.event_loop.create_task(
-                    self.report(POSITION_TEMPLATE, interval)
-                )
-            else:
-                if self.position_report_task:
-                    self.position_report_task.cancel()
-                    self.position_report_task = None
-                self.write_response("ok")
-        except (IndexError, ValueError):
-            self.write_response(error="Invalid M154 command")
+        interval = arg_s
+        if interval > 0:
+            if self.position_report_task:
+                self.position_report_task.cancel()
+            self.position_report_task = self.event_loop.create_task(
+                self.report(POSITION_TEMPLATE, interval)
+            )
+        else:
+            if self.position_report_task:
+                self.position_report_task.cancel()
+                self.position_report_task = None
+            self.write_response("ok")
 
     def _set_print_status_report(self, arg_s: int) -> None:
-        try:
-            interval = arg_s
-            if interval > 0:
-                if self.position_report_task:
-                    self.position_report_task.cancel()
-                self.position_report_task = self.event_loop.create_task(
-                    self.report(PRINT_STATUS_TEMPLATE, interval)
-                )
-            else:
-                if self.position_report_task:
-                    self.position_report_task.cancel()
-                    self.position_report_task = None
-                self.write_response("ok")
-        except (IndexError, ValueError):
-            self.write_response(error="Invalid M27 command")
+        interval = arg_s
+        if interval > 0:
+            if self.position_report_task:
+                self.position_report_task.cancel()
+            self.position_report_task = self.event_loop.create_task(
+                self.report(PRINT_STATUS_TEMPLATE, interval)
+            )
+        else:
+            if self.position_report_task:
+                self.position_report_task.cancel()
+                self.position_report_task = None
+            self.write_response("ok")
 
     def _report_software_endstops(self) -> str:
         filament_sensor_enabled = self.printer_state.get("filament_switch_sensor filament_sensor", {}).get("enabled", False)
@@ -938,10 +935,15 @@ class TFTAdapter:
         )
         self.write_response(f"{report}\nok")
 
-    def _send_ok_response(self, arg_string: Optional[str] = None, arg_s: Optional[str] = None) -> str:
-        self.write_response("ok")
-
-    def _send_ok_response(self) -> str:
+    def _send_ok_response(self,
+                          arg_s: Optional[str] = None,
+                          arg_h: Optional[str] = None,
+                          arg_b: Optional[str] = None,
+                          arg_e: Optional[str] = None,
+                          arg_x: Optional[str] = None,
+                          arg_y: Optional[str] = None,
+                          arg_r: Optional[str] = None,
+                          arg_string: Optional[str] = None) -> str:
         self.write_response("ok")
 
     def _handle_m118_command(self,
