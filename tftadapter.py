@@ -46,8 +46,6 @@ class TFTError(ServerError):
 
 RESTART_GCODES = ["RESTART", "FIRMWARE_RESTART"]
 
-MACHINE_TYPE = "Artillery Genius Pro"
-
 PRINT_STATUS_TEMPLATE = (
     "//action:notification Layer Left {{ (virtual_sdcard.file_position or 0) }}/{{ (virtual_sdcard.file_size or 0) }}"
 )
@@ -80,7 +78,7 @@ FIRMWARE_INFO_TEMPLATE = (
     "FIRMWARE_NAME:Klipper"
     "SOURCE_CODE_URL:https://github.com/Klipper3d/klipper "
     "PROTOCOL_VERSION:1.0 "
-    f"MACHINE_TYPE:{MACHINE_TYPE}\n"
+    "MACHINE_TYPE:{{ machine_name }}\n"
     "Cap:EEPROM:1\n"
     "Cap:AUTOREPORT_TEMP:1\n"
     "Cap:AUTOREPORT_POS:1\n"
@@ -238,7 +236,7 @@ class TFTAdapter:
         self.event_loop = self.server.get_event_loop()
         self.file_manager: FMComp = self.server.lookup_component('file_manager')
         self.klippy_apis: APIComp = self.server.lookup_component('klippy_apis')
-        self.machine_name = config.get('machine_name', "Klipper")
+        self.machine_name = { "machine_name": config.get('machine_name', "Klipper") }
         self.firmware_name: str = "Repetier | Klipper"
         self.last_message: Optional[str] = None
         self.current_file: str = ""
@@ -1058,7 +1056,7 @@ class TFTAdapter:
         self.write_response(f"{report}\nok")
 
     def _report_firmware_info(self) -> None:
-        report = Template(FIRMWARE_INFO_TEMPLATE).render(**self.printer_state)
+        report = Template(FIRMWARE_INFO_TEMPLATE).render(**(self.printer_state | self.machine_name))
         self.write_response(f"{report}\nok")
 
     def _report_software_endstops(self) -> None:
