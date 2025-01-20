@@ -74,8 +74,7 @@ REPORT_SETTINGS_TEMPLATE = (
 )
 
 FIRMWARE_INFO_TEMPLATE = (
-    # "FIRMWARE_NAME:Klipper {{ mcu.mcu_version }} "
-    "FIRMWARE_NAME:Klipper"
+    "FIRMWARE_NAME:{{ firmware_name }}"
     "SOURCE_CODE_URL:https://github.com/Klipper3d/klipper "
     "PROTOCOL_VERSION:1.0 "
     "MACHINE_TYPE:{{ machine_name }}\n"
@@ -236,8 +235,8 @@ class TFTAdapter:
         self.event_loop = self.server.get_event_loop()
         self.file_manager: FMComp = self.server.lookup_component('file_manager')
         self.klippy_apis: APIComp = self.server.lookup_component('klippy_apis')
-        self.machine_name = { "machine_name": config.get('machine_name', "Klipper") }
-        self.firmware_name: str = "Repetier | Klipper"
+        self.machine_name = config.get('machine_name', "Klipper")
+        self.firmware_name: str = "Klipper"
         self.last_message: Optional[str] = None
         self.current_file: str = ""
         self.file_metadata: Dict[str, Any] = {}
@@ -312,6 +311,7 @@ class TFTAdapter:
             'M24': self._start_print,
             'M25': self._pause_print,
             'M27': self._set_print_status_report,
+            'M30': self._delete_sd_file,
             'M32': self._print_file,
             'M33': self._get_long_path,
             'M36': self._get_sd_file_info,
@@ -379,7 +379,7 @@ class TFTAdapter:
                 continue
             break
 
-        self.firmware_name = "Repetier | Klipper " + printer_info['software_version']
+        self.firmware_name = "Klipper " + printer_info['software_version']
         self.config: Dict[str, Any] = cfg_status.get('configfile', {}).get('config', {})
 
         logging.info(
@@ -787,6 +787,20 @@ class TFTAdapter:
         marlin_response = Template(FILE_LIST_TEMPLATE).render(files=response['files'])
         self.write_response(marlin_response)
 
+    async def _delete_sd_file(self, arg_string: str = "") -> None:
+        # Delete a file.  Clean up the file name and make sure
+        # it is relative to the "gcodes" root.
+        path = arg_string
+        path = path.strip('\"')
+        if path.startswith("0:/"):
+            path = path[3:]
+        elif path[0] == "/":
+            path[1:]
+
+        if not path.startswith("gcodes/"):
+            path = "gcodes/" + path
+        await self.file_manager.delete_file(path)
+
     def _get_sd_file_info(self, arg_string: Optional[str] = None) -> None:
         response: Dict[str, Any] = {}
         filename: Optional[str] = arg_string
@@ -1024,7 +1038,10 @@ class TFTAdapter:
         self.write_response(f"{report}\nok")
 
     def _report_firmware_info(self) -> None:
-        report = Template(FIRMWARE_INFO_TEMPLATE).render(**(self.printer_state | self.machine_name))
+        report = Template(FIRMWARE_INFO_TEMPLATE).render(**(
+            self.printer_state |
+            { "machine_name": self.machine_name } |
+            { "firmware_name": self.firmware_name }))
         self.write_response(f"{report}\nok")
 
     def _report_software_endstops(self) -> None:
