@@ -302,14 +302,21 @@ class TFTAdapter:
         # These commands are directly executued on the server and do not to
         # make a request to Klippy
         self.direct_gcodes: Dict[str, FlexCallback] = {
-            'G26': self._send_ok_response, # G26 H240 B70 R99
-            'G30': self._send_ok_response, # G30 E1 X28 Y207
+            'G26': self._send_ok_response, # Mesh Validation Pattern (G26 H240 B70 R99)
+            'G29': self._send_ok_response, # Bed leveling (G29)
+            'G30': self._send_ok_response, # Single Z-Probe (G30 E1 X28 Y207)
+            'M0': self._cancel_print,
             'M20': self._list_sd_files,
             'M21': self._init_sd_card,
+            'M23': self._select_sd_file,
+            'M24': self._start_print,
+            'M25': self._pause_print,
             'M27': self._set_print_status_report,
             'M30': self._delete_sd_file,
-            'M33': self._select_sd_file,
+            'M32': self._print_file,
+            'M33': self._get_long_path,
             'M36': self._get_sd_file_info,
+            'M48': self._probe_bed,
             'M82': self._send_ok_response,
             'M92': self._send_ok_response,
             'M105': self._report_temperature,
@@ -317,38 +324,28 @@ class TFTAdapter:
             'M114': self._report_position,
             'M115': self._report_firmware_info,
             'M118': self._handle_m118_command,
+            'M120': self._save_gcode_state,
+            'M121': self._restore_gcode_state,
+            'M150': self._set_led,
             'M154': self._set_position_report,
             'M155': self._set_temperature_report,
+            'M201': self._set_acceleration,
+            'M203': self._set_velocity,
+            'M206': self._set_gcode_offset,
             'M211': self._report_software_endstops,
             'M220': self._set_feed_rate,
             'M221': self._set_flow_rate,
+            'M280': self._probe_command,
+            'M290': self._set_gcode_offset,
             'M420': self._set_bed_leveling,
+            'M500': self._z_offset_apply_probe,
             'M503': self._report_settings,
+            'M524': self._cancel_print,
+            'M701': self._load_filament,
+            'M702': self._unload_filament,
             'M851': self._set_probe_offset,
+            'M999': self._firmware_restart,
             'T0': self._send_ok_response,
-        }
-
-        self.special_gcodes: Dict[str, Callable[[List[str]], str]] = {
-            'M0': lambda args: "CANCEL_PRINT",
-            'M23': self._prepare_select_sd_file,
-            'M24': self._prepare_start_print,
-            'M25': self._prepare_pause_print,
-            'M32': self._prepare_print_file,
-            'M48': self._prepare_probe_bed,
-            'G29': lambda args: ["BED_MESH_CLEAR", "BED_MESH_CALIBRATE PROFILE=default"],
-            'M120': lambda args: "SAVE_GCODE_STATE STATE=TFT",
-            'M150': self._prepare_set_led,
-            'M121': lambda args: "RESTORE_GCODE_STATE STATE=TFT",
-            'M201': self._prepare_set_acceleration,
-            'M203': self._prepare_set_velocity,
-            'M206': self._prepare_set_gcode_offset,
-            'M280': self._prepare_probe_command,
-            'M290': self._prepare_set_gcode_offset,
-            'M500': lambda args: ["Z_OFFSET_APPLY_PROBE", "SAVE_CONFIG"],
-            'M524': lambda args: "CANCEL_PRINT",
-            'M701': self._prepare_load_filament,
-            'M702': self._prepare_unload_filament,
-            'M999': lambda args: "FIRMWARE_RESTART",
         }
 
         self.standard_gcodes: List[str] = {
@@ -474,11 +471,15 @@ class TFTAdapter:
             parts = [gcode, arg]
 
         # Check for commands that query state and require immediate response
-        if gcode in self.direct_gcodes:
+        if gcode in self.direct_gcodes or gcode in self.standard_gcodes:
+            if gcode in self.standard_gcodes:
+                self.queue_gcode(script)
+                self.write_response("ok")
+                return
             params: Dict[str, Any] = {}
             for part in parts[1:]:
                 logging.info(f"part: {part}")
-                if not part[1:].isnumeric():
+                if not re.match(r'^-?\d+(?:\.\d+)?$', part[1:]):
                     if not params.get("arg_string"):
                         params["arg_string"] = part
                     else:
@@ -486,22 +487,15 @@ class TFTAdapter:
                     continue
                 else:
                     arg = part[0].lower()
-                    if re.match(r'^-?\d+(?:\.\d+)$', arg):
-                        val = float(part[1:])
-                    else:
+                    if re.match(r'^-?\d+$', part[1:]):
                         val = int(part[1:])
+                    else:
+                        val = float(part[1:])
                     params[f"arg_{arg}"] = val
             logging.info(f'params: {params}')
             func = self.direct_gcodes[gcode]
             self.queue_command(func, **params)
             return
-
-        # Prepare GCodes that require special handling
-        if gcode in self.special_gcodes:
-            sgc_func = self.special_gcodes[gcode]
-            script = sgc_func(parts[1:])
-        elif gcode in self.standard_gcodes:
-            script = line
         else:
             logging.warning(f"Unregistered command: {line}")
             script = line
@@ -571,56 +565,56 @@ class TFTAdapter:
             filename = "/" + filename
         return filename
 
-    def _prepare_select_sd_file(self, args: List[str]) -> str:
-        self.current_file = self._clean_filename(args[0])
-        return f"M23 {self.current_file}"
+    def _select_sd_file(self, arg_string: str) -> str:
+        self.current_file = self._clean_filename(arg_string)
+        self.queue_gcode(f"M23 {self.current_file}")
 
-    def _prepare_start_print(self, args: List[str]) -> str:
+    def _start_print(self) -> str:
         if not self.current_file:
             raise TFTError("No file selected to print")
         sd_state = self.printer_state.get("print_stats", {}).get("state", "standby")
         if sd_state == "paused":
-            return "RESUME"
+            self.queue_gcode("RESUME")
         elif sd_state in ("standby", "cancelled"):
-            return f"SDCARD_PRINT_FILE FILENAME=\"{self.current_file}\""
+            self.queue_gcode(f"SDCARD_PRINT_FILE FILENAME=\"{self.current_file}\"")
         else:
             raise TFTError("Cannot start printing, printer is not in a stopped state")
 
-    def _prepare_pause_print(self, args: List[str]) -> str:
+    def _pause_print(self, arg_p: int) -> str:
+        # TODO: handle P1
         sd_state = self.printer_state.get("print_stats", {}).get("state", "standby")
         if sd_state == "printing":
-            return "PAUSE"
+            self.queue_gcode("PAUSE")
         else:
             raise TFTError("Cannot pause, printer is not printing")
 
-    def _prepare_probe_command(self, args: List[str]) -> None:
-        position = args[1]
-        if position == "S120":  # Test
-            return "QUERY_PROBE"
+    def _probe_command(self, arg_p: int, arg_s: int) -> None:
+        if arg_s == 120:  # Test
+            cmd = "QUERY_PROBE"
         else:
-            if self.bltouch:
+            if self.config.get("bltouch"):
                 value = {
-                    "S10": "pin_down",
-                    "S90": "pin_up",
-                    "S160": "reset"
-                }.get(position)
+                    10: "pin_down",
+                    90: "pin_up",
+                    160: "reset"
+                }.get(arg_s)
                 cmd = f"BLTOUCH_DEBUG COMMAND={value}"
             else:
                 value = {
-                    "S10": "1",
-                    "S90": "0",
-                    "S160": "0"
-                }.get(position)
+                    10: "1",
+                    90: "0",
+                    160: "0"
+                }.get(arg_s)
                 cmd = f"SET_PIN PIN=_probe_enable VALUE={value}"
-            return cmd
+        self.queue_gcode(cmd)
 
-    def _prepare_print_file(self, args: List[str]) -> str:
+    def _print_file(self, args: List[str]) -> str:
         filename = self._clean_filename(args[0])
         # Escape existing double quotes in the file name
         filename = filename.replace("\"", "\\\"")
-        return f"SDCARD_PRINT_FILE FILENAME=\"{filename}\""
+        self.queue_gcode(f"SDCARD_PRINT_FILE FILENAME=\"{filename}\"")
 
-    def _prepare_set_led(self, args: List[str]) -> str:
+    def _set_led(self, args: List[str]) -> str:
         params = {arg[0]: int(arg[1:]) for arg in args}
         red = params.get('R', 0) / 255
         green = params.get('U', 0) / 255
@@ -636,12 +630,12 @@ class TFTAdapter:
             "TRANSMIT=1 SYNC=1"
         )
         self.write_response("ok")
-        return cmd
+        self.queue_gcode(cmd)
 
-    def _prepare_set_gcode_offset(self, args: List[str]) -> str:
+    def _set_gcode_offset(self, args: List[str]) -> str:
         # args should in in the format Z0.02
         offset = args[0][1:].strip()
-        return f"SET_GCODE_OFFSET Z_ADJUST={offset} MOVE=1"
+        self.queue_gcode(f"SET_GCODE_OFFSET Z_ADJUST={offset} MOVE=1")
 
     def _set_bed_leveling(self,
                          arg_v: Optional[int] = None,
@@ -857,7 +851,7 @@ class TFTAdapter:
             response['err'] = 1
         self.write_response(response)
 
-    def _select_sd_file(self, arg_string: Optional[str] = None) -> None:
+    def _get_long_path(self, arg_string: Optional[str] = None) -> None:
         filename: Optional[str] = arg_string
         if filename is None:
             self.write_response(error="Missing filename\nok")
@@ -887,7 +881,7 @@ class TFTAdapter:
             if self.temperature_report_task:
                 self.temperature_report_task.cancel()
                 self.temperature_report_task = None
-            self.write_response("ok")
+        self.write_response("ok")
 
     def _set_position_report(self, arg_s: int) -> None:
         interval = arg_s
@@ -919,6 +913,7 @@ class TFTAdapter:
 
     def _report_software_endstops(self) -> str:
         filament_sensor_enabled = self.printer_state.get("filament_switch_sensor filament_sensor", {}).get("enabled", False)
+        logging.info(f"Filament Sensor Enabled: {filament_sensor_enabled}")
         state = {
             "state": "On" if filament_sensor_enabled else "Off"
         }
@@ -954,19 +949,19 @@ class TFTAdapter:
             else:
                 self.write_response(f"echo:{arg_string}\nok" if arg_string else "ok")
 
-    def _prepare_set_acceleration(self, arg_string: Optional[int] = None) -> None:
+    def _set_acceleration(self, arg_string: Optional[int] = None) -> None:
         acceleration = int(arg_string[0][1:])
         cmd = f"SET_VELOCITY_LIMIT ACCEL={acceleration} ACCEL_TO_DECEL={acceleration / 2}"
-        return cmd
+        self.queue_gcode(cmd)
 
-    def _prepare_set_velocity(self, arg_string: Optional[int] = None) -> None:
+    def _set_velocity(self, arg_string: Optional[int] = None) -> None:
         velocity = int(arg_string[0][1:])
         cmd = f"SET_VELOCITY_LIMIT VELOCITY={velocity}"
-        return cmd
+        self.queue_gcode(cmd)
 
-    def _prepare_set_gcode_offset(self, arg_string: Optional[str] = None) -> None:
+    def _set_gcode_offset(self, arg_string: Optional[str] = None) -> None:
         offsets = " ".join(f"{arg[0]}={arg[1:]}" for arg in arg_string)
-        return f"SET_GCODE_OFFSET {offsets}"
+        self.queue_gcode(f"SET_GCODE_OFFSET {offsets}")
 
     def _set_probe_offset(self,
                           arg_x: Optional[float] = None,
@@ -975,21 +970,21 @@ class TFTAdapter:
         response = Template(PROBE_OFFSET_TEMPLATE).render(**(self.printer_state|self.config))
         self.write_response(f"{response}\nok")
 
-    def _prepare_load_filament(self) -> str:
+    def _load_filament(self) -> str:
         params = {
             "length": 25,
             "extruder": 0,
             "zmove": 0
         }
-        return self._handle_filament(params)
+        self.queue_gcode(self._handle_filament(params))
 
-    def _prepare_unload_filament(self) -> str:
+    def _unload_filament(self) -> str:
         params = {
             "length": -25,
             "extruder": 0,
             "zmove": 0
         }
-        return self._handle_filament(params)
+        self.queue_gcode(self._handle_filament(params))
 
     def _handle_filament(self, args: Dict[str, Any]) -> str:
         length = args.get("length")
@@ -1003,26 +998,9 @@ class TFTAdapter:
         ]
         return cmd
 
-    def _prepare_probe_bed(self, args: List[str]) -> str:
-        """
-        Handle the M48 command to probe the bed and report the results.
-        Convert parameters from Marlin format to Klipper format.
-        """
+    def _probe_bed(self) -> str:
         cmd = "PROBE_ACCURACY"
-        param_map = {
-            'P': 'SAMPLES',
-            'S': 'SAMPLE_RETRACT_DIST',
-            'F': 'PROBE_SPEED'
-        }
-        klipper_args = []
-        for arg in args:
-            if arg[0] in param_map:
-                klipper_args.append(f"{param_map[arg[0]]}={arg[1:]}")
-            else:
-                klipper_args.append(arg)
-        if klipper_args:
-            cmd += " " + "join(klipper_args)"
-        return cmd
+        self.queue_gcode(cmd)
 
     def close(self) -> None:
         self.ser_conn.disconnect()
@@ -1035,13 +1013,13 @@ class TFTAdapter:
             msg += f"\nSequence {i}: {gc}"
         logging.debug(msg)
 
-    def _set_feed_rate(self, arg_s: Optional[int] = None) -> None:
+    def _set_feed_rate(self, arg_s: Optional[int] = None, arg_d: Optional[int] = None) -> None:
         if arg_s is not None:
             self.queue_gcode(f"M220 S{arg_s}")
         else:
             self.write_response(Template(f"{FEED_RATE_TEMPLATE}\nok").render(**self.printer_state))
 
-    def _set_flow_rate(self, arg_s: Optional[int] = None) -> None:
+    def _set_flow_rate(self, arg_s: Optional[int] = None, arg_d: Optional[int] = None) -> None:
         if arg_s is not None:
             self.queue_gcode(f"M221 S{arg_s}")
         else:
@@ -1063,6 +1041,24 @@ class TFTAdapter:
         state = {"state": "On" if self.printer_state.get("filament_switch_sensor filament_sensor", {}).get("enabled", False) else "Off"}
         report = Template(SOFTWARE_ENDSTOPS_TEMPLATE).render(**state)
         self.write_response(f"{report}\nok")
+
+    def _cancel_print(self) -> str:
+        self.queue_gcode("CANCEL_PRINT")
+
+    def _save_gcode_state(self) -> str:
+        self.queue_gcode("SAVE_GCODE_STATE STATE=TFT")
+
+    def _restore_gcode_state(self) -> str:
+        self.queue_gcode("RESTORE_GCODE_STATE STATE=TFT")
+
+    def _z_offset_apply_probe(self) -> List[str]:
+        self.queue_gcode(["Z_OFFSET_APPLY_PROBE", "SAVE_CONFIG"])
+
+    def _firmware_restart(self) -> str:
+        self.queue_gcode("FIRMWARE_RESTART")
+
+    def _bed_mesh_calibrate(self) -> None:
+        self.queue_gcode(["BED_MESH_CLEAR","BED_MESH_PROFILE LOAD=default"])
 
 def load_component(config: ConfigHelper) -> TFT:
     return TFTAdapter(config)
