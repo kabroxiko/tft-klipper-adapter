@@ -420,10 +420,9 @@ class TFTAdapter:
             "fan": None,
             "display_status": None,
             "print_stats": None,
-            "probe": None,
             "idle_timeout": None,
-            "filament_switch_sensor filament_sensor": None,
-            "gcode_macro TFT_BEEP": None
+            "probe": None,
+            "filament_switch_sensor filament_sensor": None
         }
         self.extruder_count = 0
         self.heaters = []
@@ -482,10 +481,10 @@ class TFTAdapter:
         script = line
         # Execute the gcode.  Check for special RRF gcodes that
         # require special handling
-        parts = line.split()
+        parts = script.split()
         gcode = parts[0].strip()
         if gcode in ["M23", "M30", "M32", "M36", "M37"]:
-            arg = line[len(gcode):].strip()
+            arg = script[len(gcode):].strip()
             parts = [gcode, arg]
 
         # Check for commands that query state and require immediate response
@@ -521,8 +520,16 @@ class TFTAdapter:
         if not script:
             logging.warning(f"No script generated for command: {line}")
             return
-
         self.queue_gcode(script)
+
+    def queue_gcode(self, script: Union[str, List[str]]) -> None:
+        if isinstance(script, str):
+            self.gc_queue.append(script)
+        else:
+            self.gc_queue.extend(script)
+        if not self.gq_busy:
+            self.gq_busy = True
+            self.event_loop.register_callback(self._process_gcode_queue)
 
     async def _process_gcode_queue(self) -> None:
         while self.gc_queue:
@@ -538,15 +545,6 @@ class TFTAdapter:
                 self.handle_gcode_response("!! " + msg)
                 logging.exception(msg)
         self.gq_busy = False
-
-    def queue_gcode(self, script: Union[str, List[str]]) -> None:
-        if isinstance(script, str):
-            self.gc_queue.append(script)
-        else:
-            self.gc_queue.extend(script)
-        if not self.gq_busy:
-            self.gq_busy = True
-            self.event_loop.register_callback(self._process_gcode_queue)
 
     def queue_command(self, cmd: FlexCallback, *args, **kwargs) -> None:
         self.command_queue.append((cmd, args, kwargs))
@@ -739,21 +737,11 @@ class TFTAdapter:
         byte_resp = (msg + "\n").encode("utf-8")
         self.ser_conn.send(byte_resp)
 
-    async def send_to_btt(self, message=None, command=None, action=None, error=None):
-        if command:
-            self.serial_handler.write(f'M118 {command}')
-        elif action:
-            self.serial_handler.write(f'M118 {"//action:" + action}')
-        elif message:
-            self.serial_handler.write(f'M118 {message}')
-        elif error:
-            self.serial_handler.write(f'M118 {"Error:" + error}')
-
     async def notify_timeleft(self, timeleft):
-        await self.send_to_btt(action=f'notification Time Left {timeleft}')
+        await self.write_response(action=f'notification Time Left {timeleft}')
 
     async def notify_dataleft(self, current, max_data):
-        await self.send_to_btt(action=f'notification Data Left {current}/{max_data}')
+        await self.write_response(action=f'notification Data Left {current}/{max_data}')
 
     async def report(self, template, interval):
         while self.ser_conn.connected and interval > 0:
@@ -1078,7 +1066,11 @@ class TFTAdapter:
         self.queue_gcode("RESTORE_GCODE_STATE STATE=TFT")
 
     def _z_offset_apply_probe(self) -> List[str]:
-        self.queue_gcode(["Z_OFFSET_APPLY_PROBE", "SAVE_CONFIG"])
+        sd_state = self.printer_state.get("print_stats", {}).get("state", "standby")
+        if sd_state in ("printing", "paused"):
+            self.write_response(error="Not saved - Printing")
+        else:
+            self.queue_gcode(["Z_OFFSET_APPLY_PROBE", "SAVE_CONFIG"])
 
     def _firmware_restart(self) -> str:
         self.queue_gcode("FIRMWARE_RESTART")
