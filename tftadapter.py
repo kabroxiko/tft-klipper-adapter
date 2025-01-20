@@ -312,7 +312,6 @@ class TFTAdapter:
             'M24': self._start_print,
             'M25': self._pause_print,
             'M27': self._set_print_status_report,
-            'M30': self._delete_sd_file,
             'M32': self._print_file,
             'M33': self._get_long_path,
             'M36': self._get_sd_file_info,
@@ -336,7 +335,7 @@ class TFTAdapter:
             'M220': self._set_feed_rate,
             'M221': self._set_flow_rate,
             'M280': self._probe_command,
-            'M290': self._set_gcode_offset,
+            'M290': self._set_babystep,
             'M420': self._set_bed_leveling,
             'M500': self._z_offset_apply_probe,
             'M503': self._report_settings,
@@ -607,6 +606,7 @@ class TFTAdapter:
                 }.get(arg_s)
                 cmd = f"SET_PIN PIN=_probe_enable VALUE={value}"
         self.queue_gcode(cmd)
+        self.write_response("ok")
 
     def _print_file(self, args: List[str]) -> str:
         filename = self._clean_filename(args[0])
@@ -629,25 +629,30 @@ class TFTAdapter:
             f"WHITE={white * brightness:.3f} "
             "TRANSMIT=1 SYNC=1"
         )
-        self.write_response("ok")
         self.queue_gcode(cmd)
+        self.write_response("ok")
 
-    def _set_gcode_offset(self, args: List[str]) -> str:
-        # args should in in the format Z0.02
-        offset = args[0][1:].strip()
-        self.queue_gcode(f"SET_GCODE_OFFSET Z_ADJUST={offset} MOVE=1")
+    def _set_babystep(self, **args: Dict[float]) -> None:
+        offsets = []
+        if 'arg_x' in args:
+            offsets.append(f"X={args['arg_x']}")
+        if 'arg_y' in args:
+            offsets.append(f"Y={args['arg_y']}")
+        if 'arg_z' in args:
+            offsets.append(f"Z={args['arg_z']}")
+        offset_str = " ".join(offsets)
+        self.queue_gcode(f"SET_GCODE_OFFSET {offset_str}")
+        self.write_response("ok")
 
     def _set_bed_leveling(self,
-                         arg_v: Optional[int] = None,
-                         arg_s: Optional[int] = None,
-                         arg_t: Optional[int] = None) -> None:
-        if arg_s:
-            if arg_s == 0:
+                          **args) -> None:
+        if args.get('arg_s'):
+            if args.get('arg_s') == 0:
                 self.queue_gcode("BED_MESH_CLEAR")
             else:
                 self.queue_gcode("BED_MESH_PROFILE LOAD=default")
         else:
-            # TODO: Falta implementar M420 V1 T1
+            # TODO: Falta implementar M420 V1 T1 y M420 Zx.xx
             self.write_response("ok")
 
     def handle_gcode_response(self, response: str) -> None:
@@ -782,20 +787,6 @@ class TFTAdapter:
         marlin_response = Template(FILE_LIST_TEMPLATE).render(files=response['files'])
         self.write_response(marlin_response)
 
-    async def _delete_sd_file(self, arg_string: str = "") -> None:
-        # Delete a file.  Clean up the file name and make sure
-        # it is relative to the "gcodes" root.
-        path = arg_string
-        path = path.strip('\"')
-        if path.startswith("0:/"):
-            path = path[3:]
-        elif path[0] == "/":
-            path[1:]
-
-        if not path.startswith("gcodes/"):
-            path = "gcodes/" + path
-        await self.file_manager.delete_file(path)
-
     def _get_sd_file_info(self, arg_string: Optional[str] = None) -> None:
         response: Dict[str, Any] = {}
         filename: Optional[str] = arg_string
@@ -928,15 +919,7 @@ class TFTAdapter:
         )
         self.write_response(f"{report}\nok")
 
-    def _send_ok_response(self,
-                          arg_s: Optional[str] = None,
-                          arg_h: Optional[str] = None,
-                          arg_b: Optional[str] = None,
-                          arg_e: Optional[str] = None,
-                          arg_x: Optional[str] = None,
-                          arg_y: Optional[str] = None,
-                          arg_r: Optional[str] = None,
-                          arg_string: Optional[str] = None) -> str:
+    def _send_ok_response(self, **args: Dict[float]) -> str:
         self.write_response("ok")
 
     def _handle_m118_command(self,
@@ -949,26 +932,33 @@ class TFTAdapter:
             else:
                 self.write_response(f"echo:{arg_string}\nok" if arg_string else "ok")
 
-    def _set_acceleration(self, arg_string: Optional[int] = None) -> None:
-        acceleration = int(arg_string[0][1:])
+    def _set_acceleration(self, **args: Dict[float]) -> None:
+        acceleration = args.get("arg_x") or args.get("arg_y")
         cmd = f"SET_VELOCITY_LIMIT ACCEL={acceleration} ACCEL_TO_DECEL={acceleration / 2}"
         self.queue_gcode(cmd)
 
-    def _set_velocity(self, arg_string: Optional[int] = None) -> None:
-        velocity = int(arg_string[0][1:])
+    def _set_velocity(self, **args: Dict[float]) -> None:
+        velocity = args.get("arg_x") or args.get("arg_y")
         cmd = f"SET_VELOCITY_LIMIT VELOCITY={velocity}"
         self.queue_gcode(cmd)
 
-    def _set_gcode_offset(self, arg_string: Optional[str] = None) -> None:
-        offsets = " ".join(f"{arg[0]}={arg[1:]}" for arg in arg_string)
-        self.queue_gcode(f"SET_GCODE_OFFSET {offsets}")
+    def _set_gcode_offset(self, **args: Dict[float]) -> None:
+        offsets = []
+        if 'arg_x' in args:
+            offsets.append(f"X={args['arg_x']}")
+        if 'arg_y' in args:
+            offsets.append(f"Y={args['arg_y']}")
+        if 'arg_z' in args:
+            offsets.append(f"Z={args['arg_z']}")
+        offset_str = " ".join(offsets)
+        self.queue_gcode(f"SET_GCODE_OFFSET {offset_str}")
+        self.write_response("ok")
 
-    def _set_probe_offset(self,
-                          arg_x: Optional[float] = None,
-                          arg_y: Optional[float] = None,
-                          arg_z: Optional[float] = None) -> None:
-        response = Template(PROBE_OFFSET_TEMPLATE).render(**(self.printer_state|self.config))
-        self.write_response(f"{response}\nok")
+    def _set_probe_offset(self, **args: Dict[float]) -> None:
+        if not args:
+            response = Template(PROBE_OFFSET_TEMPLATE).render(**(self.printer_state|self.config))
+            self.write_response(f"{response}")
+        self.write_response("ok")
 
     def _load_filament(self) -> str:
         params = {
