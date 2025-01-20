@@ -227,7 +227,32 @@ class SerialConnection:
                 logging.exception("Error during gcode processing")
 
     def send(self, data: bytes) -> None:
-        self.ser.write(data)
+        self.send_buffer += data
+        if not self.send_busy:
+            self.send_busy = True
+            self.event_loop.register_callback(self._do_send)
+
+    async def _do_send(self) -> None:
+        assert self.fd is not None
+        while self.send_buffer:
+            if not self.connected:
+                break
+            try:
+                sent = os.write(self.fd, self.send_buffer)
+            except os.error as e:
+                if e.errno == errno.EBADF or e.errno == errno.EPIPE:
+                    sent = 0
+                else:
+                    await asyncio.sleep(.001)
+                    continue
+            if sent:
+                self.send_buffer = self.send_buffer[sent:]
+            else:
+                logging.exception(
+                    "Error writing data, closing serial connection")
+                self.disconnect(reconnect=True)
+                return
+        self.send_busy = False
 
 class TFTAdapter:
     def __init__(self, config: ConfigHelper) -> None:
