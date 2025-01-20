@@ -296,7 +296,6 @@ class TFTAdapter:
         self.server.register_event_handler(
             "server:gcode_response", self.handle_gcode_response
         )
-        self.server.register_remote_method("tft_beep", self.tft_beep)
 
         # These commands are directly executued on the server and do not to
         # make a request to Klippy
@@ -446,11 +445,6 @@ class TFTAdapter:
         self.last_printer_state = 'O'
         self.is_ready = False
         self.is_shutdown = self.is_shutdown = False
-
-    def tft_beep(self, frequency: int, duration: float) -> None:
-        duration = int(duration * 1000.)
-        self.write_response(
-            {'beep_freq': frequency, 'beep_length': duration})
 
     def process_line(self, line: str) -> None:
         logging.info(f"line: {line}")
