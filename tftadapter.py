@@ -522,16 +522,20 @@ class TFTAdapter:
         self.queue_gcode(script)
 
     def queue_gcode(self, script: Union[str, List[str]]) -> None:
-        if isinstance(script, str):
-            self.queue.append(script)
-        else:
-            self.queue.extend(script)
-        if not self.gq_busy:
-            self.gq_busy = True
-            self.event_loop.register_callback(self._process_queue)
+        self.queue_task(script)
 
     def queue_command(self, cmd: FlexCallback, *args, **kwargs) -> None:
-        self.queue.append((cmd, args, kwargs))
+        self.queue_task((cmd, args, kwargs))
+
+    def queue_task(self, task: Union[str, List[str], Tuple[FlexCallback, Any, Any]]) -> None:
+        if isinstance(task, str):
+            self.queue.append(task)
+        elif isinstance(task, list):
+            self.queue.extend(task)
+        elif isinstance(task, tuple) and len(task) == 2:
+            self.queue.append((task[0], task[1], {}))
+        else:
+            self.queue.append(task)
         if not self.gq_busy:
             self.gq_busy = True
             self.event_loop.register_callback(self._process_queue)
