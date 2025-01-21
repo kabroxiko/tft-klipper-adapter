@@ -366,7 +366,6 @@ class TFTAdapter:
             'M701': self._load_filament,
             'M702': self._unload_filament,
             'M851': self._set_probe_offset,
-            'M999': self._firmware_restart,
             'T0': self._send_ok_response,
         }
 
@@ -1072,9 +1071,6 @@ class TFTAdapter:
             self.write_response(error="Not saved - Printing")
         else:
             self.queue_task(["Z_OFFSET_APPLY_PROBE", "SAVE_CONFIG"])
-
-    def _firmware_restart(self) -> str:
-        self.queue_task("FIRMWARE_RESTART")
 
 def load_component(config: ConfigHelper) -> TFT:
     return TFTAdapter(config)
