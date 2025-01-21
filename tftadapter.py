@@ -489,7 +489,7 @@ class TFTAdapter:
         # Check for commands that query state and require immediate response
         if gcode in self.direct_gcodes or gcode in self.standard_gcodes:
             if gcode in self.standard_gcodes:
-                self.queue_gcode(script)
+                self.queue_task(script)
                 self.write_response("ok")
                 return
             params: Dict[str, Any] = {}
@@ -510,7 +510,7 @@ class TFTAdapter:
                     params[f"arg_{arg}"] = val
             logging.info(f'params: {params}')
             func = self.direct_gcodes[gcode]
-            self.queue_command(func, **params)
+            self.queue_task(func, **params)
             return
         else:
             logging.warning(f"Unregistered command: {line}")
@@ -519,12 +519,9 @@ class TFTAdapter:
         if not script:
             logging.warning(f"No script generated for command: {line}")
             return
-        self.queue_gcode(script)
-
-    def queue_gcode(self, script: Union[str, List[str]]) -> None:
         self.queue_task(script)
 
-    def queue_command(self, cmd: FlexCallback, *args, **kwargs) -> None:
+    def queue_task(self, cmd: FlexCallback, *args, **kwargs) -> None:
         self.queue_task((cmd, args, kwargs))
 
     def queue_task(self, task: Union[str, List[str], Tuple[FlexCallback, Any, Any]]) -> None:
@@ -587,16 +584,16 @@ class TFTAdapter:
 
     def _select_sd_file(self, arg_string: str) -> str:
         self.current_file = self._clean_filename(arg_string)
-        self.queue_gcode(f"M23 {self.current_file}")
+        self.queue_task(f"M23 {self.current_file}")
 
     def _start_print(self) -> str:
         if not self.current_file:
             raise TFTError("No file selected to print")
         sd_state = self.printer_state.get("print_stats", {}).get("state", "standby")
         if sd_state == "paused":
-            self.queue_gcode("RESUME")
+            self.queue_task("RESUME")
         elif sd_state in ("standby", "cancelled"):
-            self.queue_gcode(f"SDCARD_PRINT_FILE FILENAME=\"{self.current_file}\"")
+            self.queue_task(f"SDCARD_PRINT_FILE FILENAME=\"{self.current_file}\"")
         else:
             raise TFTError("Cannot start printing, printer is not in a stopped state")
 
@@ -604,7 +601,7 @@ class TFTAdapter:
         # TODO: handle P1
         sd_state = self.printer_state.get("print_stats", {}).get("state", "standby")
         if sd_state == "printing":
-            self.queue_gcode("PAUSE")
+            self.queue_task("PAUSE")
         else:
             raise TFTError("Cannot pause, printer is not printing")
 
@@ -626,14 +623,14 @@ class TFTAdapter:
                     160: "0"
                 }.get(arg_s)
                 cmd = f"SET_PIN PIN=_probe_enable VALUE={value}"
-        self.queue_gcode(cmd)
+        self.queue_task(cmd)
         self.write_response("ok")
 
     def _print_file(self, args: List[str]) -> str:
         filename = self._clean_filename(args[0])
         # Escape existing double quotes in the file name
         filename = filename.replace("\"", "\\\"")
-        self.queue_gcode(f"SDCARD_PRINT_FILE FILENAME=\"{filename}\"")
+        self.queue_task(f"SDCARD_PRINT_FILE FILENAME=\"{filename}\"")
 
     def _set_led(self, args: List[str]) -> str:
         params = {arg[0]: int(arg[1:]) for arg in args}
@@ -650,7 +647,7 @@ class TFTAdapter:
             f"WHITE={white * brightness:.3f} "
             "TRANSMIT=1 SYNC=1"
         )
-        self.queue_gcode(cmd)
+        self.queue_task(cmd)
         self.write_response("ok")
 
     def _set_babystep(self, **args: Dict[float]) -> None:
@@ -662,16 +659,16 @@ class TFTAdapter:
         if 'arg_z' in args:
             offsets.append(f"Z={args['arg_z']}")
         offset_str = " ".join(offsets)
-        self.queue_gcode(f"SET_GCODE_OFFSET {offset_str}")
+        self.queue_task(f"SET_GCODE_OFFSET {offset_str}")
         self.write_response("ok")
 
     def _set_bed_leveling(self,
                           **args) -> None:
         if args.get('arg_s'):
             if args.get('arg_s') == 0:
-                self.queue_gcode("BED_MESH_CLEAR")
+                self.queue_task("BED_MESH_CLEAR")
             else:
-                self.queue_gcode("BED_MESH_PROFILE LOAD=default")
+                self.queue_task("BED_MESH_PROFILE LOAD=default")
         else:
             # TODO: Falta implementar M420 V1 T1 y M420 Zx.xx
             self.write_response("ok")
@@ -960,12 +957,12 @@ class TFTAdapter:
     def _set_acceleration(self, **args: Dict[float]) -> None:
         acceleration = args.get("arg_x") or args.get("arg_y")
         cmd = f"SET_VELOCITY_LIMIT ACCEL={acceleration} ACCEL_TO_DECEL={acceleration / 2}"
-        self.queue_gcode(cmd)
+        self.queue_task(cmd)
 
     def _set_velocity(self, **args: Dict[float]) -> None:
         velocity = args.get("arg_x") or args.get("arg_y")
         cmd = f"SET_VELOCITY_LIMIT VELOCITY={velocity}"
-        self.queue_gcode(cmd)
+        self.queue_task(cmd)
 
     def _set_gcode_offset(self, **args: Dict[float]) -> None:
         offsets = []
@@ -976,7 +973,7 @@ class TFTAdapter:
         if 'arg_z' in args:
             offsets.append(f"Z={args['arg_z']}")
         offset_str = " ".join(offsets)
-        self.queue_gcode(f"SET_GCODE_OFFSET {offset_str}")
+        self.queue_task(f"SET_GCODE_OFFSET {offset_str}")
         self.write_response("ok")
 
     def _set_probe_offset(self, **args: Dict[float]) -> None:
@@ -991,7 +988,7 @@ class TFTAdapter:
             "extruder": 0,
             "zmove": 0
         }
-        self.queue_gcode(self._handle_filament(params))
+        self.queue_task(self._handle_filament(params))
 
     def _unload_filament(self) -> str:
         params = {
@@ -999,7 +996,7 @@ class TFTAdapter:
             "extruder": 0,
             "zmove": 0
         }
-        self.queue_gcode(self._handle_filament(params))
+        self.queue_task(self._handle_filament(params))
 
     def _handle_filament(self, args: Dict[str, Any]) -> str:
         length = args.get("length")
@@ -1015,7 +1012,7 @@ class TFTAdapter:
 
     def _probe_bed(self) -> str:
         cmd = "PROBE_ACCURACY"
-        self.queue_gcode(cmd)
+        self.queue_task(cmd)
 
     def close(self) -> None:
         self.ser_conn.disconnect()
@@ -1030,13 +1027,13 @@ class TFTAdapter:
 
     def _set_feed_rate(self, arg_s: Optional[int] = None, arg_d: Optional[int] = None) -> None:
         if arg_s is not None:
-            self.queue_gcode(f"M220 S{arg_s}")
+            self.queue_task(f"M220 S{arg_s}")
         else:
             self.write_response(Template(f"{FEED_RATE_TEMPLATE}\nok").render(**self.printer_state))
 
     def _set_flow_rate(self, arg_s: Optional[int] = None, arg_d: Optional[int] = None) -> None:
         if arg_s is not None:
-            self.queue_gcode(f"M221 S{arg_s}")
+            self.queue_task(f"M221 S{arg_s}")
         else:
             self.write_response(Template(f"{FLOW_RATE_TEMPLATE}\nok").render(**self.printer_state))
 
@@ -1061,26 +1058,26 @@ class TFTAdapter:
         self.write_response(f"{report}\nok")
 
     def _cancel_print(self) -> str:
-        self.queue_gcode("CANCEL_PRINT")
+        self.queue_task("CANCEL_PRINT")
 
     def _save_gcode_state(self) -> str:
-        self.queue_gcode("SAVE_GCODE_STATE STATE=TFT")
+        self.queue_task("SAVE_GCODE_STATE STATE=TFT")
 
     def _restore_gcode_state(self) -> str:
-        self.queue_gcode("RESTORE_GCODE_STATE STATE=TFT")
+        self.queue_task("RESTORE_GCODE_STATE STATE=TFT")
 
     def _z_offset_apply_probe(self) -> List[str]:
         sd_state = self.printer_state.get("print_stats", {}).get("state", "standby")
         if sd_state in ("printing", "paused"):
             self.write_response(error="Not saved - Printing")
         else:
-            self.queue_gcode(["Z_OFFSET_APPLY_PROBE", "SAVE_CONFIG"])
+            self.queue_task(["Z_OFFSET_APPLY_PROBE", "SAVE_CONFIG"])
 
     def _firmware_restart(self) -> str:
-        self.queue_gcode("FIRMWARE_RESTART")
+        self.queue_task("FIRMWARE_RESTART")
 
     def _bed_mesh_calibrate(self) -> None:
-        self.queue_gcode(["BED_MESH_CLEAR","BED_MESH_PROFILE LOAD=default"])
+        self.queue_task(["BED_MESH_CLEAR","BED_MESH_PROFILE LOAD=default"])
 
 def load_component(config: ConfigHelper) -> TFT:
     return TFTAdapter(config)
