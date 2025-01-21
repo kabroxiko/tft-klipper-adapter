@@ -281,8 +281,7 @@ class TFTAdapter:
         self.initialized: bool = False
         self.cq_busy: bool = False
         self.gq_busy: bool = False
-        self.command_queue: List[Tuple[FlexCallback, Any, Any]] = []
-        self.gc_queue: List[str] = []
+        self.queue: List[Union[str, Tuple[FlexCallback, Any, Any]]] = []
         self.last_printer_state: str = 'O'
         self.last_update_time: float = 0.
 
@@ -524,44 +523,45 @@ class TFTAdapter:
 
     def queue_gcode(self, script: Union[str, List[str]]) -> None:
         if isinstance(script, str):
-            self.gc_queue.append(script)
+            self.queue.append(script)
         else:
-            self.gc_queue.extend(script)
+            self.queue.extend(script)
         if not self.gq_busy:
             self.gq_busy = True
-            self.event_loop.register_callback(self._process_gcode_queue)
-
-    async def _process_gcode_queue(self) -> None:
-        while self.gc_queue:
-            script = self.gc_queue.pop(0)
-            logging.info(f"script: {script}")
-            try:
-                if script in RESTART_GCODES:
-                    await self.klippy_apis.do_restart(script)
-                else:
-                    await self.klippy_apis.run_gcode(script)
-            except self.server.error:
-                msg = f"Error executing script {script}"
-                self.handle_gcode_response("!! " + msg)
-                logging.exception(msg)
-        self.gq_busy = False
+            self.event_loop.register_callback(self._process_queue)
 
     def queue_command(self, cmd: FlexCallback, *args, **kwargs) -> None:
-        self.command_queue.append((cmd, args, kwargs))
-        if not self.cq_busy:
-            self.cq_busy = True
-            self.event_loop.register_callback(self._process_command_queue)
+        self.queue.append((cmd, args, kwargs))
+        if not self.gq_busy:
+            self.gq_busy = True
+            self.event_loop.register_callback(self._process_queue)
 
-    async def _process_command_queue(self) -> None:
-        while self.command_queue:
-            cmd, args, kwargs = self.command_queue.pop(0)
-            try:
-                ret = cmd(*args, **kwargs)
-                if ret is not None:
-                    await ret
-            except Exception:
-                logging.exception("Error processing command")
-        self.cq_busy = False
+    async def _process_queue(self) -> None:
+        self.gq_busy = True
+        while self.queue:
+            item = self.queue.pop(0)
+            if isinstance(item, str):
+                script = item
+                logging.info(f"script: {script}")
+                try:
+                    if script in RESTART_GCODES:
+                        await self.klippy_apis.do_restart(script)
+                    else:
+                        await self.klippy_apis.run_gcode(script)
+                        logging.info(f"end script: {script}")
+                except self.server.error:
+                    msg = f"Error executing script {script}"
+                    self.handle_gcode_response("!! " + msg)
+                    logging.exception(msg)
+            else:
+                cmd, args, kwargs = item
+                try:
+                    ret = cmd(*args, **kwargs)
+                    if ret is not None:
+                        await ret
+                except Exception:
+                    logging.exception("Error processing command")
+        self.gq_busy = False
 
     def _clean_filename(self, filename: str) -> str:
         # Remove quotes and whitespace
