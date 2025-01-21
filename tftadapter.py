@@ -1076,8 +1076,5 @@ class TFTAdapter:
     def _firmware_restart(self) -> str:
         self.queue_task("FIRMWARE_RESTART")
 
-    def _bed_mesh_calibrate(self) -> None:
-        self.queue_task(["BED_MESH_CLEAR","BED_MESH_PROFILE LOAD=default"])
-
 def load_component(config: ConfigHelper) -> TFT:
     return TFTAdapter(config)
