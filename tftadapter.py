@@ -327,7 +327,6 @@ class TFTAdapter:
             'G26': self._send_ok_response, # Mesh Validation Pattern (G26 H240 B70 R99)
             'G29': self._send_ok_response, # Bed leveling (G29)
             'G30': self._send_ok_response, # Single Z-Probe (G30 E1 X28 Y207)
-            'M0': self._cancel_print,
             'M20': self._list_sd_files,
             'M21': self._init_sd_card,
             'M23': self._select_sd_file,
@@ -338,7 +337,7 @@ class TFTAdapter:
             'M32': self._print_file,
             'M33': self._get_long_path,
             'M36': self._get_sd_file_info,
-            'M48': self._probe_bed,
+            'M48': "PROBE_ACCURACY",
             'M82': self._send_ok_response,
             'M92': self._send_ok_response,
             'M105': self._report_temperature,
@@ -346,8 +345,8 @@ class TFTAdapter:
             'M114': self._report_position,
             'M115': self._report_firmware_info,
             'M118': self._handle_m118_command,
-            'M120': self._save_gcode_state,
-            'M121': self._restore_gcode_state,
+            'M120': "SAVE_GCODE_STATE STATE=TFT",
+            'M121': "RESTORE_GCODE_STATE STATE=TFT",
             'M150': self._set_led,
             'M154': self._set_position_report,
             'M155': self._set_temperature_report,
@@ -362,7 +361,7 @@ class TFTAdapter:
             'M420': self._set_bed_leveling,
             'M500': self._z_offset_apply_probe,
             'M503': self._report_settings,
-            'M524': self._cancel_print,
+            'M524': "CANCEL_PRINT",
             'M701': self._load_filament,
             'M702': self._unload_filament,
             'M851': self._set_probe_offset,
@@ -489,6 +488,10 @@ class TFTAdapter:
         if gcode in self.direct_gcodes or gcode in self.standard_gcodes:
             if gcode in self.standard_gcodes:
                 self.queue_task(script)
+                self.write_response("ok")
+                return
+            if isinstance(self.direct_gcodes[gcode], str):
+                self.queue_task(self.direct_gcodes[gcode])
                 self.write_response("ok")
                 return
             params: Dict[str, Any] = {}
@@ -1006,10 +1009,6 @@ class TFTAdapter:
         ]
         return cmd
 
-    def _probe_bed(self) -> str:
-        cmd = "PROBE_ACCURACY"
-        self.queue_task(cmd)
-
     def close(self) -> None:
         self.ser_conn.disconnect()
         if self.temperature_report_task:
@@ -1052,15 +1051,6 @@ class TFTAdapter:
         state = {"state": "On" if self.printer_state.get("filament_switch_sensor filament_sensor", {}).get("enabled", False) else "Off"}
         report = Template(SOFTWARE_ENDSTOPS_TEMPLATE).render(**state)
         self.write_response(f"{report}\nok")
-
-    def _cancel_print(self) -> str:
-        self.queue_task("CANCEL_PRINT")
-
-    def _save_gcode_state(self) -> str:
-        self.queue_task("SAVE_GCODE_STATE STATE=TFT")
-
-    def _restore_gcode_state(self) -> str:
-        self.queue_task("RESTORE_GCODE_STATE STATE=TFT")
 
     def _z_offset_apply_probe(self) -> List[str]:
         sd_state = self.printer_state.get("print_stats", {}).get("state", "standby")
